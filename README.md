@@ -5,7 +5,7 @@
 AI coding agents constantly claim *"all tests pass, bug fixed, migration ran"* — and sometimes they're lying. AgentReceipt reads your **Claude Code / Cursor session** (the `.jsonl` transcript already on your disk), cross-checks every success claim against the session's own tool-call record, and gives you a signed **Trust Receipt**: a score, an archetype, and a cited verdict for each claim. Lies caught, with evidence.
 
 ```bash
-npx agentreceipt
+npx agentreceipt --web https://agentreceipt.dev
 ```
 
 ```
@@ -32,7 +32,7 @@ npx agentreceipt
 You let an agent run with real access. It told you it was done. **Was it?** AgentReceipt answers that — deterministically, from the transcript, in 15 seconds.
 
 - **No LLM in the verdict.** A claim is only marked a *lie* when a relevant command actually **ran and failed** (cited, with its exit code). "Said it, never ran it" is flagged separately as *unproven* — never as a lie. Precision over drama.
-- **Zero friction.** The input already exists at `~/.claude/projects/…`. No signup, no integration, no instrumentation. `npx agentreceipt` and you have a receipt.
+- **Zero friction.** The input already exists at `~/.claude/projects/…`. No signup, no integration, no instrumentation. `npx agentreceipt --web` finds the latest session, creates a receipt locally, and opens the share page.
 - **Tamper-evident & shareable.** Every receipt is ed25519-signed. Edit a number and verification breaks. Each public receipt is a card you can post — and a link anyone can verify, no account.
 
 ## How it scores
@@ -48,9 +48,12 @@ Trust starts at 100; a cited contradiction is heavy, an unproven claim is modera
 ## Use it
 
 ```bash
-npx agentreceipt              # grade the latest session for this repo
-npx agentreceipt --all        # latest session anywhere
-npx agentreceipt path.jsonl   # a specific transcript
+npx agentreceipt --web                      # find latest session and open web receipt
+npx agentreceipt --web https://your.app     # open receipt on a specific hosted site
+npx agentreceipt --url                      # print the share URL without opening browser
+npx agentreceipt                            # terminal-only receipt
+npx agentreceipt --all                      # latest session anywhere
+npx agentreceipt path.jsonl                 # a specific transcript
 npx agentreceipt verify r.json
 ```
 

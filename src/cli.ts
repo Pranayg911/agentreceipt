@@ -3,15 +3,26 @@
 // Trust Receipt right in the terminal.
 //
 //   npx agentreceipt              # grade the most recent session for this repo
+//   npx agentreceipt --web        # grade and open a web receipt
+//   npx agentreceipt --url        # grade and print a web receipt URL
 //   npx agentreceipt --all        # grade the most recent session anywhere
 //   npx agentreceipt <file.jsonl> # grade a specific transcript
 //   npx agentreceipt verify <file.json>   # verify a saved receipt
 
 import fs from "node:fs";
-import { gradeSessionFile, verifyReceipt, type TrustReceipt } from "./index.js";
+import { spawn } from "node:child_process";
+import {
+  encodeReceipt,
+  gradeSessionFile,
+  verifyReceipt,
+  type TrustReceipt,
+} from "./index.js";
 import { latestSession } from "./sessions.js";
 
 const G = "\x1b[32m", R = "\x1b[31m", Y = "\x1b[33m", D = "\x1b[2m", B = "\x1b[1m", X = "\x1b[0m";
+const DEFAULT_WEB_URL = process.env.AGENTRECEIPT_WEB_URL ?? "https://agentreceipt.dev";
+const WEB_FLAGS = ["--web", "--open"];
+const URL_FLAGS = ["--url", "--print-url"];
 
 function bar(score: number): string {
   const n = Math.round(score / 5);
@@ -49,8 +60,36 @@ function render(r: TrustReceipt): void {
     `  ${v.valid ? G + "✓ ed25519 signed & verifiable" : R + "✗ " + v.reason}${X}` +
       `  ${D}key ${r.signature.fingerprint}${X}`
   );
-  console.log(`  ${D}share:  verify.agentreceipt.dev/${r.receiptId}  (coming) — receipt saved locally${X}`);
   console.log("");
+}
+
+function hasFlag(args: string[], flags: string[]): boolean {
+  return args.some((arg) => flags.includes(arg));
+}
+
+function valueAfterFlag(args: string[], flags: string[]): string | null {
+  const i = args.findIndex((arg) => flags.includes(arg));
+  if (i < 0) return null;
+  const next = args[i + 1];
+  return next && !next.startsWith("-") ? next : DEFAULT_WEB_URL;
+}
+
+function receiptUrl(r: TrustReceipt, baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/r/${encodeReceipt(r)}`;
+}
+
+function openUrl(url: string): boolean {
+  const command =
+    process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+
+  try {
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function main(): void {
@@ -64,8 +103,9 @@ function main(): void {
   }
 
   let file: string | null = null;
-  if (args[0] && args[0].endsWith(".jsonl")) {
-    file = args[0];
+  const fileArg = args.find((arg) => !arg.startsWith("-") && arg.endsWith(".jsonl"));
+  if (fileArg) {
+    file = fileArg;
   } else {
     const sess = latestSession(!args.includes("--all"));
     if (!sess) {
@@ -81,6 +121,22 @@ function main(): void {
 
   const receipt = gradeSessionFile(file);
   render(receipt);
+
+  const shouldOpenWeb = hasFlag(args, WEB_FLAGS);
+  const shouldPrintUrl = shouldOpenWeb || hasFlag(args, URL_FLAGS);
+  if (shouldPrintUrl) {
+    const baseUrl = valueAfterFlag(args, [...WEB_FLAGS, ...URL_FLAGS]) ?? DEFAULT_WEB_URL;
+    const url = receiptUrl(receipt, baseUrl);
+    console.log(`  ${D}web receipt:${X} ${url}`);
+    if (shouldOpenWeb) {
+      console.log(
+        openUrl(url)
+          ? `  ${G}opened in browser${X}`
+          : `  ${Y}could not open browser; paste the URL above${X}`
+      );
+    }
+    console.log("");
+  }
 
   // Persist the receipt next to a local ledger so it can be verified later.
   try {

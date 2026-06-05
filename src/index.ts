@@ -28,3 +28,4 @@ export { analyze, type AnalysisResult, type ClaimReceipt } from "./analyze.js";
 export { score, type Score } from "./score.js";
 export { latestSession, listSessions } from "./sessions.js";
 export { sign, verify, type SignaturePayload } from "./signer.js";
+export { encodeReceipt } from "./token.js";
