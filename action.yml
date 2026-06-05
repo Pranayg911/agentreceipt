@@ -1,0 +1,76 @@
+name: AgentReceipt
+description: Signed verification for AI-generated code work in pull requests and CI.
+
+inputs:
+  agent:
+    description: "Agent adapter to use: auto, claude, codex, or cursor."
+    required: false
+    default: auto
+  min-trust:
+    description: Minimum trust score required for the check to pass.
+    required: false
+    default: "80"
+  web-url:
+    description: Base URL for signed web receipt links.
+    required: false
+    default: "https://agentreceipt.dev"
+  session-file:
+    description: Optional transcript/checkpoint JSON or JSONL file available on the workflow runner.
+    required: false
+    default: ""
+  comment:
+    description: "Comment the markdown receipt on pull requests. Requires pull-requests: write."
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Install AgentReceipt
+      shell: bash
+      run: |
+        npm ci --prefix "${{ github.action_path }}"
+        npm run build --prefix "${{ github.action_path }}"
+
+    - name: Verify AI agent work
+      shell: bash
+      env:
+        INPUT_AGENT: ${{ inputs.agent }}
+        INPUT_MIN_TRUST: ${{ inputs.min-trust }}
+        INPUT_WEB_URL: ${{ inputs.web-url }}
+        INPUT_SESSION_FILE: ${{ inputs.session-file }}
+        INPUT_COMMENT: ${{ inputs.comment }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set +e
+        REPORT="$RUNNER_TEMP/agentreceipt-report.md"
+        SESSION_ARG=()
+        if [ -n "$INPUT_SESSION_FILE" ]; then
+          SESSION_ARG=("$INPUT_SESSION_FILE")
+        fi
+
+        node "${{ github.action_path }}/dist/cli.js" \
+          --ci \
+          --agent "$INPUT_AGENT" \
+          --min-trust "$INPUT_MIN_TRUST" \
+          --format markdown \
+          --output "$REPORT" \
+          --url "$INPUT_WEB_URL" \
+          "${SESSION_ARG[@]}"
+        STATUS=$?
+
+        if [ -f "$REPORT" ]; then
+          cat "$REPORT" >> "$GITHUB_STEP_SUMMARY"
+        else
+          {
+            echo "# AgentReceipt FAIL"
+            echo
+            echo "No receipt report was produced. In cloud CI, pass session-file when the runner cannot access local Claude Code, Codex, or Cursor logs."
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ "$INPUT_COMMENT" = "true" ] && [ -f "$REPORT" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file "$REPORT" || true
+        fi
+
+        exit "$STATUS"

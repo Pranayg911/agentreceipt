@@ -5,6 +5,7 @@
 //   npx agentreceipt              # grade the most recent session for this repo
 //   npx agentreceipt --web        # grade and open a web receipt
 //   npx agentreceipt --agent codex # force one adapter: claude, codex, cursor
+//   npx agentreceipt --ci --min-trust 80 # fail CI below a trust threshold
 //   npx agentreceipt --url        # grade and print a web receipt URL
 //   npx agentreceipt --all        # grade the most recent session anywhere
 //   npx agentreceipt <file.jsonl> # grade a specific transcript
@@ -27,6 +28,9 @@ const DEFAULT_WEB_URL = process.env.AGENTRECEIPT_WEB_URL ?? "https://agentreceip
 const WEB_FLAGS = ["--web", "--open"];
 const URL_FLAGS = ["--url", "--print-url"];
 const AGENTS = new Set(["auto", "claude", "codex", "cursor"]);
+const FORMATS = new Set(["text", "json", "markdown"]);
+const VALUE_FLAGS = new Set(["--agent", "--format", "--min-trust", "--output"]);
+type ReportFormat = "text" | "json" | "markdown";
 
 function bar(score: number): string {
   const n = Math.round(score / 5);
@@ -73,20 +77,50 @@ function render(r: TrustReceipt): void {
 }
 
 function hasFlag(args: string[], flags: string[]): boolean {
-  return args.some((arg) => flags.includes(arg));
+  return args.some((arg) => flags.includes(arg) || flags.some((flag) => arg.startsWith(`${flag}=`)));
 }
 
 function valueAfterFlag(args: string[], flags: string[]): string | null {
+  const inline = args.find((arg) => flags.some((flag) => arg.startsWith(`${flag}=`)));
+  if (inline) return inline.slice(inline.indexOf("=") + 1);
   const i = args.findIndex((arg) => flags.includes(arg));
   if (i < 0) return null;
   const next = args[i + 1];
   return next && !next.startsWith("-") ? next : DEFAULT_WEB_URL;
 }
 
+function valueForFlag(args: string[], flag: string): string | null {
+  const inline = args.find((arg) => arg.startsWith(`${flag}=`));
+  if (inline) return inline.slice(flag.length + 1);
+  const i = args.indexOf(flag);
+  if (i < 0) return null;
+  const next = args[i + 1];
+  return next && !next.startsWith("-") ? next : null;
+}
+
+function numberForFlag(args: string[], flag: string): number | null {
+  const value = valueForFlag(args, flag);
+  if (!value) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > 100) {
+    console.error(`${R}${flag} must be a number from 0 to 100.${X}`);
+    process.exit(2);
+  }
+  return n;
+}
+
+function formatFromArgs(args: string[]): ReportFormat {
+  const value = valueForFlag(args, "--format") ?? "text";
+  if (!FORMATS.has(value)) {
+    console.error(`${R}Unknown format "${value}". Use text, json, or markdown.${X}`);
+    process.exit(2);
+  }
+  return value as ReportFormat;
+}
+
 function agentFromArgs(args: string[]): AgentKind | "auto" {
-  const i = args.indexOf("--agent");
-  if (i < 0) return "auto";
-  const value = args[i + 1];
+  const value = valueForFlag(args, "--agent");
+  if (!value) return "auto";
   if (!AGENTS.has(value)) {
     console.error(`${R}Unknown agent "${value}". Use auto, claude, codex, or cursor.${X}`);
     process.exit(2);
@@ -96,6 +130,76 @@ function agentFromArgs(args: string[]): AgentKind | "auto" {
 
 function receiptUrl(r: TrustReceipt, baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/r/${encodeReceipt(r)}`;
+}
+
+function statusLabel(status: string): string {
+  if (status === "verified") return "PASS";
+  if (status === "contradicted") return "FAIL";
+  return "GAP";
+}
+
+function markdownEscape(s: string): string {
+  return s.replace(/\|/g, "\\|").replace(/\n+/g, " ").trim();
+}
+
+function markdownReport(
+  r: TrustReceipt,
+  options: { url?: string; minTrust?: number; passed: boolean }
+): string {
+  const s = r.body;
+  const st = s.stats;
+  const v = verifyReceipt(r);
+  const verdict = options.passed ? "PASS" : "FAIL";
+  const rows = s.claims.length
+    ? s.claims
+        .map(
+          (c) =>
+            `| ${statusLabel(c.status)} | ${markdownEscape(c.kind)} | ${markdownEscape(c.claim)} | ${markdownEscape(c.evidence)} |`
+        )
+        .join("\n")
+    : "| PASS | none | No claims, edits, or verification gaps found | No issues detected |";
+
+  return [
+    `# AgentReceipt ${verdict}`,
+    "",
+    `**Trust:** ${s.trust}/100`,
+    `**Archetype:** ${s.archetype}`,
+    `**Agent:** ${s.agent}`,
+    `**Receipt:** ${r.receiptId}`,
+    `**Signature:** ${v.valid ? "valid" : `invalid (${v.reason})`}`,
+    options.minTrust != null ? `**Minimum required:** ${options.minTrust}/100` : null,
+    options.url ? `**Signed receipt URL:** ${options.url}` : null,
+    s.evidenceNote ? `**Evidence note:** ${s.evidenceNote}` : null,
+    "",
+    `**Stats:** ${st.toolCalls} tool calls / ${st.edits} edits / ${st.verified} verified / ${st.unsupported} gaps / ${st.contradicted} failed`,
+    "",
+    "| Status | Kind | Finding | Evidence |",
+    "|---|---|---|---|",
+    rows,
+    "",
+    "_AgentReceipt verifies AI-generated work with deterministic transcript, command, git, and package evidence. It is not an LLM judge._",
+    "",
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
+}
+
+function jsonReport(
+  r: TrustReceipt,
+  options: { url?: string; minTrust?: number; passed: boolean }
+): string {
+  const signature = verifyReceipt(r);
+  return JSON.stringify(
+    {
+      ok: options.passed,
+      minTrust: options.minTrust ?? null,
+      url: options.url ?? null,
+      signature,
+      receipt: r,
+    },
+    null,
+    2
+  );
 }
 
 function openUrl(url: string): boolean {
@@ -112,8 +216,39 @@ function openUrl(url: string): boolean {
   }
 }
 
+function positionalTranscriptArg(args: string[]): string | null {
+  const consumed = new Set<number>();
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (VALUE_FLAGS.has(arg) && args[i + 1] && !args[i + 1].startsWith("-")) {
+      consumed.add(i + 1);
+    }
+    if ([...WEB_FLAGS, ...URL_FLAGS].includes(arg) && args[i + 1] && !args[i + 1].startsWith("-")) {
+      consumed.add(i + 1);
+    }
+  }
+  return (
+    args.find((arg, i) => !consumed.has(i) && !arg.startsWith("-") && /\.(jsonl|json)$/i.test(arg)) ??
+    null
+  );
+}
+
+function persistReceipt(receipt: TrustReceipt): void {
+  try {
+    const out = `${process.env.HOME}/.agentreceipt/last-receipt.json`;
+    fs.mkdirSync(`${process.env.HOME}/.agentreceipt`, { recursive: true });
+    fs.writeFileSync(out, JSON.stringify(receipt, null, 2));
+  } catch {
+    /* ignore */
+  }
+}
+
 function main(): void {
   const args = process.argv.slice(2);
+  const format = formatFromArgs(args);
+  const ci = args.includes("--ci");
+  const minTrust = numberForFlag(args, "--min-trust") ?? (ci ? 80 : null);
+  const output = valueForFlag(args, "--output");
   const agent = agentFromArgs(args);
 
   if (args[0] === "verify" && args[1]) {
@@ -124,7 +259,7 @@ function main(): void {
   }
 
   let file: string | null = null;
-  const fileArg = args.find((arg) => !arg.startsWith("-") && /\.(jsonl|json)$/i.test(arg));
+  const fileArg = positionalTranscriptArg(args);
   if (fileArg) {
     file = fileArg;
   } else {
@@ -140,39 +275,66 @@ function main(): void {
       process.exit(2);
     }
     file = sess.path;
-    console.log(`${D}grading ${sess.agent} session: ${sess.path}${X}`);
+    if (format === "text") console.log(`${D}grading ${sess.agent} session: ${sess.path}${X}`);
   }
 
   const receipt = gradeSessionFile(file, Date.now(), {
     agent: agent === "auto" ? "auto" : agent,
     project: collectProjectContext(),
   });
-  render(receipt);
-
   const shouldOpenWeb = hasFlag(args, WEB_FLAGS);
   const shouldPrintUrl = shouldOpenWeb || hasFlag(args, URL_FLAGS);
-  if (shouldPrintUrl) {
-    const baseUrl = valueAfterFlag(args, [...WEB_FLAGS, ...URL_FLAGS]) ?? DEFAULT_WEB_URL;
-    const url = receiptUrl(receipt, baseUrl);
-    console.log(`  ${D}web receipt:${X} ${url}`);
-    if (shouldOpenWeb) {
-      console.log(
-        openUrl(url)
-          ? `  ${G}opened in browser${X}`
-          : `  ${Y}could not open browser; paste the URL above${X}`
-      );
+  const wantsReportUrl = shouldPrintUrl || format !== "text" || ci;
+  const baseUrl = valueAfterFlag(args, [...WEB_FLAGS, ...URL_FLAGS]) ?? DEFAULT_WEB_URL;
+  const url = wantsReportUrl ? receiptUrl(receipt, baseUrl) : undefined;
+  const signature = verifyReceipt(receipt);
+  const passed = signature.valid && (minTrust == null || receipt.body.trust >= minTrust);
+
+  if (format === "text") {
+    render(receipt);
+    if (shouldPrintUrl && url) {
+      console.log(`  ${D}web receipt:${X} ${url}`);
+      if (shouldOpenWeb) {
+        console.log(
+          openUrl(url)
+            ? `  ${G}opened in browser${X}`
+            : `  ${Y}could not open browser; paste the URL above${X}`
+        );
+      }
+      console.log("");
     }
-    console.log("");
+
+    if (minTrust != null) {
+      const color = passed ? G : R;
+      console.log(
+        `  ${color}${passed ? "PASS" : "FAIL"}${X} trust ${receipt.body.trust}/100 ` +
+          `${passed ? ">=" : "<"} required ${minTrust}/100`
+      );
+      console.log("");
+    }
+
+    if (output) {
+      const report = markdownReport(receipt, { url, minTrust: minTrust ?? undefined, passed });
+      fs.writeFileSync(output, report.endsWith("\n") ? report : `${report}\n`);
+      console.log(`  ${D}wrote report:${X} ${output}`);
+    }
+  } else {
+    const report =
+      format === "json"
+        ? jsonReport(receipt, { url, minTrust: minTrust ?? undefined, passed })
+        : markdownReport(receipt, { url, minTrust: minTrust ?? undefined, passed });
+
+    if (output) {
+      fs.writeFileSync(output, report.endsWith("\n") ? report : `${report}\n`);
+    } else {
+      console.log(report);
+    }
   }
 
   // Persist the receipt next to a local ledger so it can be verified later.
-  try {
-    const out = `${process.env.HOME}/.agentreceipt/last-receipt.json`;
-    fs.mkdirSync(`${process.env.HOME}/.agentreceipt`, { recursive: true });
-    fs.writeFileSync(out, JSON.stringify(receipt, null, 2));
-  } catch {
-    /* ignore */
-  }
+  persistReceipt(receipt);
+
+  if (ci || minTrust != null) process.exit(passed ? 0 : 1);
 }
 
 main();

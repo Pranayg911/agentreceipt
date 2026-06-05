@@ -10,6 +10,7 @@ It auto-detects supported local agent evidence, adds repo context from `git stat
 
 ```bash
 npx --yes github:Pranayg911/agentreceipt --web https://agentreceipt.dev
+npx --yes github:Pranayg911/agentreceipt --ci --min-trust 80
 ```
 
 Example output:
@@ -58,10 +59,19 @@ That matters when agents:
 - Claim "all good" after a failing command.
 - Produce a PR where the reviewer needs a fast evidence trail.
 
+## Why Models Do Not Replace It
+
+AgentReceipt is deliberately not another model prompt. Models can improve the product by generating richer transcripts, running more checks, and attaching more evidence. They cannot replace the independent receipt because the receipt is signed, replayable, repo-aware, and based on deterministic artifacts outside the model's opinion.
+
+The wedge is simple: every AI-made PR should arrive with a small evidence packet that reviewers, founders, and CI can trust before merge.
+
 ## Use It
 
 ```bash
 npx --yes github:Pranayg911/agentreceipt --web              # latest session, open signed web receipt
+npx --yes github:Pranayg911/agentreceipt --ci --min-trust 80 # fail if trust is below 80
+npx --yes github:Pranayg911/agentreceipt --format markdown --output agentreceipt.md
+npx --yes github:Pranayg911/agentreceipt --format json      # machine-readable receipt
 npx --yes github:Pranayg911/agentreceipt --agent codex      # force Codex
 npx --yes github:Pranayg911/agentreceipt --agent cursor     # force Cursor checkpoint mode
 npx --yes github:Pranayg911/agentreceipt --agent claude     # force Claude Code
@@ -76,6 +86,43 @@ When published to npm, this becomes:
 
 ```bash
 npx agentreceipt --web
+```
+
+## GitHub Action
+
+Add AgentReceipt to pull requests as a merge gate:
+
+```yaml
+name: AgentReceipt
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  verify-ai-work:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Pranayg911/agentreceipt@main
+        with:
+          agent: auto
+          min-trust: 80
+          comment: true
+```
+
+Set `comment: false` if you only want the receipt in the GitHub Actions step summary. Raise or lower `min-trust` depending on how strict the repo should be.
+
+Local terminals can auto-detect Claude Code, Codex, and Cursor evidence. Cloud CI runners cannot see logs on your laptop, so pass `session-file` when the transcript/checkpoint is produced earlier in the workflow:
+
+```yaml
+- uses: Pranayg911/agentreceipt@main
+  with:
+    session-file: .agentreceipt/session.jsonl
+    min-trust: 80
 ```
 
 ## Library
@@ -94,9 +141,9 @@ receipt.body.claims;    // signed evidence findings
 
 ## Status
 
-`v0.1` supports Claude Code transcripts, Codex rollout logs, Cursor checkpoint metadata, deterministic claim checking, repo-aware skipped-check detection, scoring/archetypes, ed25519 signing, offline verification, and self-contained web receipt URLs.
+`v0.1` supports Claude Code transcripts, Codex rollout logs, Cursor checkpoint metadata, deterministic claim checking, repo-aware skipped-check detection, scoring/archetypes, ed25519 signing, offline verification, self-contained web receipt URLs, CI thresholds, markdown/json reports, and a GitHub Action.
 
-Next: GitHub Action PR comments, CI log ingestion, richer Cursor transcript parsing, and `--ci --min-trust` for merge gates.
+Next: CI log ingestion, richer Cursor transcript parsing, stronger policy packs, and team ledgers.
 
 ## License
 
