@@ -4,6 +4,7 @@
 //
 //   npx agentreceipt              # grade the most recent session for this repo
 //   npx agentreceipt --web        # grade and open a web receipt
+//   npx agentreceipt --agent codex # force one adapter: claude, codex, cursor
 //   npx agentreceipt --url        # grade and print a web receipt URL
 //   npx agentreceipt --all        # grade the most recent session anywhere
 //   npx agentreceipt <file.jsonl> # grade a specific transcript
@@ -16,6 +17,7 @@ import {
   encodeReceipt,
   gradeSessionFile,
   verifyReceipt,
+  type AgentKind,
   type TrustReceipt,
 } from "./index.js";
 import { latestSession } from "./sessions.js";
@@ -24,6 +26,7 @@ const G = "\x1b[32m", R = "\x1b[31m", Y = "\x1b[33m", D = "\x1b[2m", B = "\x1b[1
 const DEFAULT_WEB_URL = process.env.AGENTRECEIPT_WEB_URL ?? "https://agentreceipt.dev";
 const WEB_FLAGS = ["--web", "--open"];
 const URL_FLAGS = ["--url", "--print-url"];
+const AGENTS = new Set(["auto", "claude", "codex", "cursor"]);
 
 function bar(score: number): string {
   const n = Math.round(score / 5);
@@ -36,7 +39,9 @@ function render(r: TrustReceipt): void {
   const v = verifyReceipt(r);
   const scoreColor = s.trust >= 80 ? G : s.trust >= 55 ? Y : R;
   console.log("");
-  console.log(`  ${B}AGENT RECEIPT${X}  ${D}${s.sessionId.slice(0, 8)} · ${r.receiptId}${X}`);
+  console.log(
+    `  ${B}AGENT RECEIPT${X}  ${D}${s.agent} · ${s.sessionId.slice(0, 8)} · ${r.receiptId}${X}`
+  );
   console.log("");
   console.log(`  TRUST  ${scoreColor}${B}${s.trust}${X}/100   ${bar(s.trust)}`);
   console.log(`  ${B}${s.archetype}${X}`);
@@ -49,6 +54,9 @@ function render(r: TrustReceipt): void {
   }
   if (s.claims.length === 0) {
     console.log(`  ${D}No claims, edits, or verification gaps found to check.${X}`);
+  }
+  if (s.evidenceNote) {
+    console.log(`  ${Y}note${X} ${s.evidenceNote}`);
   }
   console.log("");
   const st = s.stats;
@@ -75,6 +83,17 @@ function valueAfterFlag(args: string[], flags: string[]): string | null {
   return next && !next.startsWith("-") ? next : DEFAULT_WEB_URL;
 }
 
+function agentFromArgs(args: string[]): AgentKind | "auto" {
+  const i = args.indexOf("--agent");
+  if (i < 0) return "auto";
+  const value = args[i + 1];
+  if (!AGENTS.has(value)) {
+    console.error(`${R}Unknown agent "${value}". Use auto, claude, codex, or cursor.${X}`);
+    process.exit(2);
+  }
+  return value as AgentKind | "auto";
+}
+
 function receiptUrl(r: TrustReceipt, baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/r/${encodeReceipt(r)}`;
 }
@@ -95,6 +114,7 @@ function openUrl(url: string): boolean {
 
 function main(): void {
   const args = process.argv.slice(2);
+  const agent = agentFromArgs(args);
 
   if (args[0] === "verify" && args[1]) {
     const r = JSON.parse(fs.readFileSync(args[1], "utf8")) as TrustReceipt;
@@ -104,23 +124,27 @@ function main(): void {
   }
 
   let file: string | null = null;
-  const fileArg = args.find((arg) => !arg.startsWith("-") && arg.endsWith(".jsonl"));
+  const fileArg = args.find((arg) => !arg.startsWith("-") && /\.(jsonl|json)$/i.test(arg));
   if (fileArg) {
     file = fileArg;
   } else {
-    const sess = latestSession(!args.includes("--all"));
+    const sess = latestSession({
+      agent,
+      scopeToCwd: !args.includes("--all"),
+    });
     if (!sess) {
       console.error(
-        `${R}No Claude Code sessions found in ~/.claude/projects.${X}\n` +
-          `Run this in a repo where you've used Claude Code, or pass a .jsonl path.`
+        `${R}No supported AI agent sessions found.${X}\n` +
+          `Run this in a repo where you've used Claude Code, Codex, or Cursor, pass --all, or pass a transcript path.`
       );
       process.exit(2);
     }
     file = sess.path;
-    console.log(`${D}grading ${sess.path}${X}`);
+    console.log(`${D}grading ${sess.agent} session: ${sess.path}${X}`);
   }
 
   const receipt = gradeSessionFile(file, Date.now(), {
+    agent: agent === "auto" ? "auto" : agent,
     project: collectProjectContext(),
   });
   render(receipt);

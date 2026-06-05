@@ -11,9 +11,11 @@ export interface TrustReceipt {
   /** Signed core — tamper-evident. */
   body: {
     sessionId: string;
+    agent: string;
     trust: number;
     archetype: string;
     claims: ClaimReceipt[];
+    evidenceNote?: string;
     stats: {
       toolCalls: number;
       edits: number;
@@ -44,9 +46,11 @@ export function buildReceipt(
 ): TrustReceipt {
   const body = {
     sessionId: session.sessionId || "unknown",
+    agent: session.agent,
     trust: sc.trust,
     archetype: sc.archetype,
     claims: analysis.receipts,
+    ...(session.evidenceNote ? { evidenceNote: session.evidenceNote } : {}),
     stats: {
       toolCalls: analysis.toolCalls,
       edits: analysis.edits,

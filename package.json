@@ -1,7 +1,7 @@
 {
   "name": "agentreceipt",
   "version": "0.1.0",
-  "description": "Signed verification for AI-generated code work. AgentReceipt reads Claude Code transcripts plus local repo evidence, catches failed checks, skipped verification, and unsupported claims, then emits an ed25519-verifiable Trust Receipt.",
+  "description": "Signed verification for AI-generated code work. AgentReceipt auto-detects Claude Code, Codex, and Cursor evidence, catches failed checks, skipped verification, and unsupported claims, then emits an ed25519-verifiable Trust Receipt.",
   "type": "module",
   "license": "MIT",
   "keywords": ["ai", "agents", "claude-code", "cursor", "coding-agent", "trust", "eval", "ed25519", "verifiable", "transcript"],

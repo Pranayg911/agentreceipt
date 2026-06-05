@@ -29,6 +29,9 @@ export function score(a: AnalysisResult): Score {
   if (hasVerificationGap && !hasCheckProof) {
     trust = Math.min(trust, 78); // changed work with no observed checks is never high-trust
   }
+  if (unsupported > 0) {
+    trust = Math.min(trust, 89); // 100 means no known gaps
+  }
   if (unsupported >= 3) {
     trust = Math.min(trust, 65);
   }

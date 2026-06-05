@@ -6,7 +6,7 @@ AI coding agents can edit files, run commands, and say "done." AgentReceipt turn
 
 > Did this AI-made change earn trust before merge or deploy?
 
-It reads the Claude Code transcript already on disk, adds local repo evidence from `git status` and `package.json`, then checks for failed commands, skipped expected checks, missing migrations, dependency risk, and unsupported success claims.
+It auto-detects supported local agent evidence, adds repo context from `git status` and `package.json`, then checks for failed commands, skipped expected checks, missing migrations, dependency risk, and unsupported success claims.
 
 ```bash
 npx --yes github:Pranayg911/agentreceipt --web https://agentreceipt.dev
@@ -37,7 +37,9 @@ AgentReceipt uses deterministic evidence, not an LLM judge.
 
 | Evidence | What it catches |
 |---|---|
-| Agent transcript | Claimed tests/build/deploy vs actual tool results |
+| Claude Code transcript | Claimed tests/build/deploy vs actual tool results |
+| Codex rollout logs | Assistant messages, command calls, command outputs, patch applications |
+| Cursor checkpoints | Agent-touched files when full transcript logs are not available |
 | Bash results | Failed tests, failed builds, failed deploys |
 | Edit/write tools | Whether files were actually changed |
 | Git status | What files changed in the working tree |
@@ -60,6 +62,9 @@ That matters when agents:
 
 ```bash
 npx --yes github:Pranayg911/agentreceipt --web              # latest session, open signed web receipt
+npx --yes github:Pranayg911/agentreceipt --agent codex      # force Codex
+npx --yes github:Pranayg911/agentreceipt --agent cursor     # force Cursor checkpoint mode
+npx --yes github:Pranayg911/agentreceipt --agent claude     # force Claude Code
 npx --yes github:Pranayg911/agentreceipt --url              # print receipt URL without opening browser
 npx --yes github:Pranayg911/agentreceipt                    # terminal-only receipt
 npx --yes github:Pranayg911/agentreceipt --all              # latest session anywhere
@@ -89,9 +94,9 @@ receipt.body.claims;    // signed evidence findings
 
 ## Status
 
-`v0.1` supports Claude Code transcripts, deterministic claim checking, repo-aware skipped-check detection, scoring/archetypes, ed25519 signing, offline verification, and self-contained web receipt URLs.
+`v0.1` supports Claude Code transcripts, Codex rollout logs, Cursor checkpoint metadata, deterministic claim checking, repo-aware skipped-check detection, scoring/archetypes, ed25519 signing, offline verification, and self-contained web receipt URLs.
 
-Next: GitHub Action PR comments, CI log ingestion, Codex/Cursor parsers, and `--ci --min-trust` for merge gates.
+Next: GitHub Action PR comments, CI log ingestion, richer Cursor transcript parsing, and `--ci --min-trust` for merge gates.
 
 ## License
 

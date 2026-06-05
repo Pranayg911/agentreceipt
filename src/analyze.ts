@@ -151,7 +151,20 @@ function matchWindow(cmd: string, re: RegExp): string {
 function bashCommands(toolCalls: ToolCall[]): { call: ToolCall; cmd: string }[] {
   return toolCalls
     .filter((t) => t.name === "Bash" && typeof t.input.command === "string")
-    .map((t) => ({ call: t, cmd: String(t.input.command) }));
+    .map((t) => ({ call: t, cmd: evidenceCommand(String(t.input.command)) }));
+}
+
+function evidenceCommand(cmd: string): string {
+  // Do not let heredoc/file contents count as executed commands. Example:
+  // `cat > package.json <<EOF ... "test":"vitest" ... EOF` is not a test run.
+  if (/<<\s*['"]?\w+['"]?/.test(cmd)) return cmd.split("\n")[0] ?? cmd;
+  // Inline eval scripts often contain sample commands as strings. Treat the
+  // outer eval as the evidence, not strings embedded inside the script.
+  const evalMatch = /^\s*(node|python3?|ruby|perl)\s+(-e|--eval)\b/.exec(cmd);
+  if (evalMatch) {
+    return evalMatch[0];
+  }
+  return cmd;
 }
 
 function uniqueFiles(files: string[]): string[] {

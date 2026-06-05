@@ -8,9 +8,11 @@ import { parseSessionFile, parseSessionText } from "./parse.js";
 import { analyze, type ProjectAuditContext } from "./analyze.js";
 import { score } from "./score.js";
 import { buildReceipt, verifyReceipt, type TrustReceipt } from "./receipt.js";
+import type { AgentKind } from "./sessions.js";
 
 export interface GradeOptions {
   project?: ProjectAuditContext;
+  agent?: AgentKind | "auto";
 }
 
 export function gradeSessionText(
@@ -18,7 +20,7 @@ export function gradeSessionText(
   now = Date.now(),
   options: GradeOptions = {}
 ): TrustReceipt {
-  const session = parseSessionText(raw);
+  const session = parseSessionText(raw, options.agent ?? "auto");
   const analysis = analyze(session, options);
   return buildReceipt(session, analysis, score(analysis), now);
 }
@@ -28,7 +30,7 @@ export function gradeSessionFile(
   now = Date.now(),
   options: GradeOptions = {}
 ): TrustReceipt {
-  const session = parseSessionFile(file);
+  const session = parseSessionFile(file, options.agent ?? "auto");
   const analysis = analyze(session, options);
   return buildReceipt(session, analysis, score(analysis), now);
 }
@@ -38,7 +40,7 @@ export type { TrustReceipt };
 export { parseSessionFile, parseSessionText } from "./parse.js";
 export { analyze, type AnalysisResult, type ClaimReceipt } from "./analyze.js";
 export { score, type Score } from "./score.js";
-export { latestSession, listSessions } from "./sessions.js";
+export { latestSession, listSessions, type AgentKind, type SessionFile } from "./sessions.js";
 export { sign, verify, type SignaturePayload } from "./signer.js";
 export { encodeReceipt } from "./token.js";
 export { collectProjectContext } from "./project.js";
