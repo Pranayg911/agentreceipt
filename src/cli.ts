@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import {
+  collectProjectContext,
   encodeReceipt,
   gradeSessionFile,
   verifyReceipt,
@@ -47,13 +48,13 @@ function render(r: TrustReceipt): void {
     console.log(`     ${D}${c.evidence}${X}`);
   }
   if (s.claims.length === 0) {
-    console.log(`  ${D}No success claims found to check.${X}`);
+    console.log(`  ${D}No claims, edits, or verification gaps found to check.${X}`);
   }
   console.log("");
   const st = s.stats;
   console.log(
     `  ${D}${st.toolCalls} tool calls · ${st.edits} edits · ` +
-      `${G}${st.verified} verified${X}${D} · ${Y}${st.unsupported} unproven${X}${D} · ${R}${st.contradicted} contradicted${X}` +
+      `${G}${st.verified} verified${X}${D} · ${Y}${st.unsupported} gaps${X}${D} · ${R}${st.contradicted} failed${X}` +
       `${D} · ~$${st.approxCostUsd}${X}`
   );
   console.log(
@@ -119,7 +120,9 @@ function main(): void {
     console.log(`${D}grading ${sess.path}${X}`);
   }
 
-  const receipt = gradeSessionFile(file);
+  const receipt = gradeSessionFile(file, Date.now(), {
+    project: collectProjectContext(),
+  });
   render(receipt);
 
   const shouldOpenWeb = hasFlag(args, WEB_FLAGS);

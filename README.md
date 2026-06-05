@@ -1,73 +1,97 @@
-# 🧾 AgentReceipt
+# AgentReceipt
 
-**The signed proof your AI coding agent actually did the work.**
+**Signed verification for AI-generated code work.**
 
-AI coding agents constantly claim *"all tests pass, bug fixed, migration ran"* — and sometimes they're lying. AgentReceipt reads your **Claude Code / Cursor session** (the `.jsonl` transcript already on your disk), cross-checks every success claim against the session's own tool-call record, and gives you a signed **Trust Receipt**: a score, an archetype, and a cited verdict for each claim. Lies caught, with evidence.
+AI coding agents can edit files, run commands, and say "done." AgentReceipt turns the session into a signed Trust Receipt that answers a better question:
+
+> Did this AI-made change earn trust before merge or deploy?
+
+It reads the Claude Code transcript already on disk, adds local repo evidence from `git status` and `package.json`, then checks for failed commands, skipped expected checks, missing migrations, dependency risk, and unsupported success claims.
 
 ```bash
-npx agentreceipt --web https://agentreceipt.dev
+npx --yes github:Pranayg911/agentreceipt --web https://agentreceipt.dev
 ```
 
+Example output:
+
+```text
+  AGENT RECEIPT  7d310499 / 7aa40d34
+
+  TRUST  69/100   ##############------
+  The Optimist
+
+  FAIL Tests failed during the session
+     tests failed after 5 changed files - `npm test` exited 1
+  GAP Build was skipped for changed code
+     package.json has a build script, but no build command was observed
+  PASS Typecheck ran after changes
+     typecheck passed after 5 changed files - `tsc --noEmit` exited 0
+
+  138 tool calls / 5 edits / 1 verified / 1 gap / 1 failed / ~$4.18
+  PASS ed25519 signed & verifiable   key HS3Qs3Bhqp...
 ```
-  AGENT RECEIPT  7d310499 · 7aa40d34
 
-  TRUST  100/100   ████████████████████
-  The Test-Driven Closer
+## What It Verifies
 
-  ✓ "the build is clean"
-     build ran and passed — `npx tsc -p tsconfig.json` exited 0
-  ✗ "all tests pass"
-     claimed tests passed, but `npm test` exited 1        ← caught
-  ~ "ran the migration"
-     claimed the migration ran, but no migration command was run this session
+AgentReceipt uses deterministic evidence, not an LLM judge.
 
-  593 tool calls · 224 edits · 18 verified · 1 unproven · 1 contradicted · ~$19.79
-  ✓ ed25519 signed & verifiable   key HS3Qs3Bhqp…
-```
-
----
-
-## Why
-
-You let an agent run with real access. It told you it was done. **Was it?** AgentReceipt answers that — deterministically, from the transcript, in 15 seconds.
-
-- **No LLM in the verdict.** A claim is only marked a *lie* when a relevant command actually **ran and failed** (cited, with its exit code). "Said it, never ran it" is flagged separately as *unproven* — never as a lie. Precision over drama.
-- **Zero friction.** The input already exists at `~/.claude/projects/…`. No signup, no integration, no instrumentation. `npx agentreceipt --web` finds the latest session, creates a receipt locally, and opens the share page.
-- **Tamper-evident & shareable.** Every receipt is ed25519-signed. Edit a number and verification breaks. Each public receipt is a card you can post — and a link anyone can verify, no account.
-
-## How it scores
-
-| Verdict | Meaning |
+| Evidence | What it catches |
 |---|---|
-| `✓ verified` | a relevant command ran and **passed** (exit 0 / no error) |
-| `✗ contradicted` | a relevant command ran and **failed** — a cited lie |
-| `~ unproven` | the claim was made but **no** relevant command was observed |
+| Agent transcript | Claimed tests/build/deploy vs actual tool results |
+| Bash results | Failed tests, failed builds, failed deploys |
+| Edit/write tools | Whether files were actually changed |
+| Git status | What files changed in the working tree |
+| package.json scripts | Expected checks that were skipped |
+| Schema/dependency files | Missing migrations, installs, builds, or tests |
 
-Trust starts at 100; a cited contradiction is heavy, an unproven claim is moderate, verified claims earn a little back. The **archetype** (*The Test-Driven Closer*, *The Confident Liar*, *The Vibe Coder*, *The Quiet Operator*, …) is the shareable status label.
+## Why This Gap Exists
 
-## Use it
+CI tells you whether a configured command passed. AgentReceipt tells you whether the agent's work was actually verified relative to what changed.
+
+That matters when agents:
+
+- Edit app code but never run tests.
+- Touch schema files but never run migrations.
+- Change dependencies but never install/build.
+- Claim "all good" after a failing command.
+- Produce a PR where the reviewer needs a fast evidence trail.
+
+## Use It
 
 ```bash
-npx agentreceipt --web                      # find latest session and open web receipt
-npx agentreceipt --web https://your.app     # open receipt on a specific hosted site
-npx agentreceipt --url                      # print the share URL without opening browser
-npx agentreceipt                            # terminal-only receipt
-npx agentreceipt --all                      # latest session anywhere
-npx agentreceipt path.jsonl                 # a specific transcript
-npx agentreceipt verify r.json
+npx --yes github:Pranayg911/agentreceipt --web              # latest session, open signed web receipt
+npx --yes github:Pranayg911/agentreceipt --url              # print receipt URL without opening browser
+npx --yes github:Pranayg911/agentreceipt                    # terminal-only receipt
+npx --yes github:Pranayg911/agentreceipt --all              # latest session anywhere
+npx --yes github:Pranayg911/agentreceipt path.jsonl         # specific transcript
+npx --yes github:Pranayg911/agentreceipt verify r.json      # verify saved receipt
 ```
+
+When published to npm, this becomes:
+
+```bash
+npx agentreceipt --web
+```
+
+## Library
 
 ```ts
-import { gradeSessionFile } from "agentreceipt";
-const receipt = gradeSessionFile("~/.claude/projects/<proj>/<id>.jsonl");
-receipt.body.trust;        // 0-100
-receipt.body.archetype;    // "The Test-Driven Closer"
-receipt.body.claims;       // [{ kind, claim, status, evidence }]
+import { collectProjectContext, gradeSessionFile } from "agentreceipt";
+
+const receipt = gradeSessionFile("~/.claude/projects/<proj>/<id>.jsonl", Date.now(), {
+  project: collectProjectContext(),
+});
+
+receipt.body.trust;     // 0-100
+receipt.body.archetype; // "The Optimist"
+receipt.body.claims;    // signed evidence findings
 ```
 
 ## Status
 
-`v0.1` — Claude Code transcript parsing, the deterministic claim-vs-evidence engine, scoring/archetypes, ed25519 signing + offline verify, and the CLI all work today (validated on real 2,000-line sessions). **Next:** Cursor/Codex parsers, the public verify page + shareable card, and a `--ci` mode that gates PRs on a minimum trust score. MIT, built in the open.
+`v0.1` supports Claude Code transcripts, deterministic claim checking, repo-aware skipped-check detection, scoring/archetypes, ed25519 signing, offline verification, and self-contained web receipt URLs.
+
+Next: GitHub Action PR comments, CI log ingestion, Codex/Cursor parsers, and `--ci --min-trust` for merge gates.
 
 ## License
 

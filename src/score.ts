@@ -18,6 +18,23 @@ export function score(a: AnalysisResult): Score {
   trust -= contradicted * 28; // a cited lie is severe
   trust -= unsupported * 11; // claimed-but-unobserved
   trust += Math.min(verified * 4, 16); // earn a little back for proof
+  const hasVerificationGap = a.receipts.some(
+    (r) => r.kind === "verification" && r.status === "unsupported"
+  );
+  const hasCheckProof = a.receipts.some(
+    (r) =>
+      ["tests", "build", "typecheck", "lint"].includes(r.kind) &&
+      r.status === "verified"
+  );
+  if (hasVerificationGap && !hasCheckProof) {
+    trust = Math.min(trust, 78); // changed work with no observed checks is never high-trust
+  }
+  if (unsupported >= 3) {
+    trust = Math.min(trust, 65);
+  }
+  if (verified + contradicted + unsupported === 0 && a.edits === 0) {
+    trust = Math.min(trust, 68); // no observed work is not proof of trust
+  }
   trust = Math.max(2, Math.min(100, Math.round(trust)));
 
   const totalClaims = verified + contradicted + unsupported;
@@ -37,7 +54,10 @@ function pickArchetype(x: {
   if (x.contradicted >= 2)
     return { name: "The Confident Liar", blurb: "Claimed success it couldn't back up — more than once, with receipts." };
   if (x.contradicted === 1)
-    return { name: "The Optimist", blurb: "One claim didn't survive contact with its own tool log." };
+    return { name: "The Optimist", blurb: "One claim or check didn't survive contact with its own tool log." };
+
+  if (x.edits === 0 && x.totalClaims === 0)
+    return { name: "The Talker", blurb: "Plenty of words, no edits or verification evidence recorded." };
 
   // High-trust band: proved its work or stayed quiet — never labelled negatively.
   if (x.trust >= 85) {
@@ -50,10 +70,8 @@ function pickArchetype(x: {
 
   // Mid/low band, no cited lie — overclaiming relative to evidence.
   if (x.unsupported >= 3)
-    return { name: "The Vibe Coder", blurb: "Lots of 'it works' energy, not many commands to back it." };
+    return { name: "The Vibe Coder", blurb: "Lots of work changed, not enough verification to back it." };
   if (x.unsupported >= 1)
-    return { name: "The Trust-Me Bro", blurb: "Said it passed; didn't actually run it." };
-  if (x.edits === 0 && x.totalClaims === 0)
-    return { name: "The Talker", blurb: "Plenty of words, no edits or commands recorded." };
+    return { name: "The Trust-Me Bro", blurb: "Some important checks were claimed, skipped, or not observed." };
   return { name: "The Steady Hand", blurb: "Did the work without overclaiming." };
 }

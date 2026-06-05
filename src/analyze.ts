@@ -22,6 +22,19 @@ export interface ClaimReceipt {
   evidence: string;
 }
 
+export interface ProjectAuditContext {
+  /** Changed files from git status/diff. If omitted, we fall back to transcript edit paths. */
+  changedFiles?: string[];
+  /** Scripts from the nearest package.json, when available. */
+  packageScripts?: Record<string, string>;
+  /** Where changedFiles came from. */
+  source?: "git" | "transcript" | "none";
+}
+
+export interface AnalyzeOptions {
+  project?: ProjectAuditContext;
+}
+
 interface ClaimSpec {
   kind: string;
   /** Assertive claim patterns (already past the hedge filter). */
@@ -71,6 +84,34 @@ const SPECS: ClaimSpec[] = [
   },
 ];
 
+const TEST_CMD = SPECS.find((s) => s.kind === "tests")!.cmd;
+const BUILD_CMD = SPECS.find((s) => s.kind === "build")!.cmd;
+const TYPECHECK_CMD = SPECS.find((s) => s.kind === "typecheck")!.cmd;
+const LINT_CMD = SPECS.find((s) => s.kind === "lint")!.cmd;
+const MIGRATION_CMD = SPECS.find((s) => s.kind === "migration")!.cmd;
+const DEPLOY_CMD = SPECS.find((s) => s.kind === "deploy")!.cmd;
+const INSTALL_CMD =
+  /\b(npm\s+(install|i|ci)|pnpm\s+(install|i)|yarn\s+(install|add)|bun\s+install|pip\s+install|poetry\s+install|bundle\s+install|cargo\s+fetch|go\s+mod\s+(download|tidy))\b/i;
+const ANY_VERIFY_CMD = new RegExp(
+  [
+    TEST_CMD.source,
+    BUILD_CMD.source,
+    TYPECHECK_CMD.source,
+    LINT_CMD.source,
+  ].join("|"),
+  "i"
+);
+
+const GENERATED_OR_VENDOR =
+  /(^|\/)(node_modules|\.next|dist|build|coverage|\.git|vendor|target|\.turbo|\.cache)(\/|$)/i;
+const SOURCE_FILE =
+  /\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|kt|swift|php|cs|cpp|c|h|hpp|css|scss|sass|vue|svelte)$/i;
+const TEST_FILE = /(^|\/)(__tests__|tests?|specs?)(\/|$)|\.(test|spec)\./i;
+const DB_FILE =
+  /(^|\/)(supabase|migrations?|prisma|drizzle|db|database)(\/|$)|schema\.sql$|schema\.prisma$|migration/i;
+const DEP_FILE =
+  /(^|\/)(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?|requirements\.txt|pyproject\.toml|poetry\.lock|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock)$/i;
+
 // Hedge words that, when they precede a claim, make it non-assertive.
 const HEDGE = /\b(if|once|to|should|when|make|makes|making|let'?s|will|need|needs|would|could|after|so\s+that|in\s+order\s+to|trying\s+to|attempt|hopefully|expect|should\s+now|run\s+the|running\s+the|let\s+me|i'?ll|going\s+to)\b/i;
 
@@ -113,6 +154,198 @@ function bashCommands(toolCalls: ToolCall[]): { call: ToolCall; cmd: string }[] 
     .map((t) => ({ call: t, cmd: String(t.input.command) }));
 }
 
+function uniqueFiles(files: string[]): string[] {
+  return [...new Set(files.map((f) => f.trim()).filter(Boolean))]
+    .filter((f) => !GENERATED_OR_VENDOR.test(f))
+    .sort();
+}
+
+function touchedFiles(session: ParsedSession): string[] {
+  return uniqueFiles(
+    session.toolCalls.map((t) => t.touchedFile).filter((f): f is string => !!f)
+  );
+}
+
+function fileSummary(files: string[]): string {
+  const shown = files.slice(0, 3).join(", ");
+  return `${files.length} changed file${files.length === 1 ? "" : "s"}${
+    shown ? `: ${shown}${files.length > 3 ? ", ..." : ""}` : ""
+  }`;
+}
+
+function hasScript(project: ProjectAuditContext | undefined, name: string): boolean {
+  return typeof project?.packageScripts?.[name] === "string";
+}
+
+function lastRelevant(
+  bash: { call: ToolCall; cmd: string }[],
+  re: RegExp
+): { call: ToolCall; cmd: string } | null {
+  const matches = bash.filter((b) => re.test(b.cmd));
+  return matches.length > 0 ? matches[matches.length - 1] : null;
+}
+
+function wasObserved(bash: { call: ToolCall; cmd: string }[], re: RegExp): boolean {
+  return lastRelevant(bash, re) !== null;
+}
+
+function passedLast(bash: { call: ToolCall; cmd: string }[], re: RegExp): boolean {
+  return lastRelevant(bash, re)?.call.ok === true;
+}
+
+function checkFinding(
+  bash: { call: ToolCall; cmd: string }[],
+  re: RegExp,
+  kind: string,
+  label: string,
+  changed: string[]
+): ClaimReceipt | null {
+  const last = lastRelevant(bash, re);
+  if (!last) return null;
+  const cited = matchWindow(last.cmd, re);
+  if (last.call.ok) {
+    return {
+      kind,
+      claim: `${label} ran after changes`,
+      status: "verified",
+      evidence: `${label.toLowerCase()} passed after ${fileSummary(changed)} — \`${cited}\` exited 0`,
+    };
+  }
+  return {
+    kind,
+    claim: `${label} failed during the session`,
+    status: "contradicted",
+    evidence: `${label.toLowerCase()} failed after ${fileSummary(changed)} — \`${cited}\`${
+      last.call.exitCode != null ? ` exited ${last.call.exitCode}` : " errored"
+    }`,
+  };
+}
+
+function auditWork(
+  session: ParsedSession,
+  bash: { call: ToolCall; cmd: string }[],
+  edits: number,
+  project?: ProjectAuditContext
+): ClaimReceipt[] {
+  const changed = uniqueFiles(
+    project?.changedFiles?.length ? project.changedFiles : touchedFiles(session)
+  );
+  if (changed.length === 0) {
+    return edits > 0
+      ? [
+          {
+            kind: "verification",
+            claim: "Edits were recorded but changed files were not identified",
+            status: "unsupported",
+            evidence: `${edits} edit tool call(s) were recorded, but no file paths were available to audit`,
+          },
+        ]
+      : [];
+  }
+
+  const findings: ClaimReceipt[] = [];
+  const codeFiles = changed.filter((f) => SOURCE_FILE.test(f) && !TEST_FILE.test(f));
+  const testFiles = changed.filter((f) => TEST_FILE.test(f));
+  const dbFiles = changed.filter((f) => DB_FILE.test(f));
+  const depFiles = changed.filter((f) => DEP_FILE.test(f));
+  const source = project?.source === "git" ? "git diff" : "transcript edits";
+
+  const checks = [
+    checkFinding(bash, TEST_CMD, "tests", "Tests", changed),
+    checkFinding(bash, BUILD_CMD, "build", "Build", changed),
+    checkFinding(bash, TYPECHECK_CMD, "typecheck", "Typecheck", changed),
+    checkFinding(bash, LINT_CMD, "lint", "Lint", changed),
+  ].filter((f): f is ClaimReceipt => !!f);
+  findings.push(...checks);
+
+  const anyVerification = wasObserved(bash, ANY_VERIFY_CMD);
+  if ((codeFiles.length > 0 || testFiles.length > 0) && !anyVerification) {
+    findings.push({
+      kind: "verification",
+      claim: "Changed code without observed verification",
+      status: "unsupported",
+      evidence: `${source} shows ${fileSummary(changed)}, but no test/build/typecheck/lint command was observed`,
+    });
+  }
+
+  if (codeFiles.length > 0 && hasScript(project, "test") && !wasObserved(bash, TEST_CMD)) {
+    findings.push({
+      kind: "tests",
+      claim: "Tests were skipped for changed code",
+      status: "unsupported",
+      evidence: `package.json has a test script and ${fileSummary(codeFiles)}, but no test command was observed`,
+    });
+  }
+
+  if (
+    codeFiles.length > 0 &&
+    (hasScript(project, "typecheck") || hasScript(project, "type-check")) &&
+    !wasObserved(bash, TYPECHECK_CMD)
+  ) {
+    findings.push({
+      kind: "typecheck",
+      claim: "Typecheck was skipped for changed code",
+      status: "unsupported",
+      evidence: `package.json has a typecheck script and ${fileSummary(codeFiles)}, but no typecheck command was observed`,
+    });
+  }
+
+  if (codeFiles.length > 0 && hasScript(project, "build") && !wasObserved(bash, BUILD_CMD)) {
+    findings.push({
+      kind: "build",
+      claim: "Build was skipped for changed code",
+      status: "unsupported",
+      evidence: `package.json has a build script and ${fileSummary(codeFiles)}, but no build command was observed`,
+    });
+  }
+
+  if (codeFiles.length > 0 && hasScript(project, "lint") && !wasObserved(bash, LINT_CMD)) {
+    findings.push({
+      kind: "lint",
+      claim: "Lint was skipped for changed code",
+      status: "unsupported",
+      evidence: `package.json has a lint script and ${fileSummary(codeFiles)}, but no lint command was observed`,
+    });
+  }
+
+  if (dbFiles.length > 0 && !wasObserved(bash, MIGRATION_CMD)) {
+    findings.push({
+      kind: "migration",
+      claim: "Database/schema changes were not migration-verified",
+      status: "unsupported",
+      evidence: `${fileSummary(dbFiles)}, but no migration/schema command was observed`,
+    });
+  }
+
+  if (
+    depFiles.length > 0 &&
+    !wasObserved(bash, INSTALL_CMD) &&
+    !passedLast(bash, BUILD_CMD) &&
+    !passedLast(bash, TEST_CMD)
+  ) {
+    findings.push({
+      kind: "dependencies",
+      claim: "Dependency changes were not installed or rebuilt",
+      status: "unsupported",
+      evidence: `${fileSummary(depFiles)}, but no install/build/test command was observed afterward`,
+    });
+  }
+
+  if (wasObserved(bash, DEPLOY_CMD) && !passedLast(bash, DEPLOY_CMD)) {
+    const deploy = lastRelevant(bash, DEPLOY_CMD)!;
+    findings.push({
+      kind: "deploy",
+      claim: "Deploy command failed",
+      status: "contradicted",
+      evidence: `deploy command failed — \`${matchWindow(deploy.cmd, DEPLOY_CMD)}\`${
+        deploy.call.exitCode != null ? ` exited ${deploy.call.exitCode}` : " errored"
+      }`,
+    });
+  }
+
+  return findings;
+}
+
 export interface AnalysisResult {
   receipts: ClaimReceipt[];
   counts: { verified: number; contradicted: number; unsupported: number };
@@ -120,7 +353,7 @@ export interface AnalysisResult {
   toolCalls: number;
 }
 
-export function analyze(session: ParsedSession): AnalysisResult {
+export function analyze(session: ParsedSession, options: AnalyzeOptions = {}): AnalysisResult {
   const bash = bashCommands(session.toolCalls);
   const edits = session.toolCalls.filter((t) =>
     ["Edit", "Write", "NotebookEdit", "MultiEdit"].includes(t.name)
@@ -189,6 +422,8 @@ export function analyze(session: ParsedSession): AnalysisResult {
       });
     }
   }
+
+  receipts.push(...auditWork(session, bash, edits, options.project));
 
   // Counts reflect every distinct claim we detected (drives the score).
   const counts = {

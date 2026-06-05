@@ -5,19 +5,31 @@
 //   // receipt.body.trust, receipt.body.archetype, receipt.body.claims[]
 
 import { parseSessionFile, parseSessionText } from "./parse.js";
-import { analyze } from "./analyze.js";
+import { analyze, type ProjectAuditContext } from "./analyze.js";
 import { score } from "./score.js";
 import { buildReceipt, verifyReceipt, type TrustReceipt } from "./receipt.js";
 
-export function gradeSessionText(raw: string, now = Date.now()): TrustReceipt {
+export interface GradeOptions {
+  project?: ProjectAuditContext;
+}
+
+export function gradeSessionText(
+  raw: string,
+  now = Date.now(),
+  options: GradeOptions = {}
+): TrustReceipt {
   const session = parseSessionText(raw);
-  const analysis = analyze(session);
+  const analysis = analyze(session, options);
   return buildReceipt(session, analysis, score(analysis), now);
 }
 
-export function gradeSessionFile(file: string, now = Date.now()): TrustReceipt {
+export function gradeSessionFile(
+  file: string,
+  now = Date.now(),
+  options: GradeOptions = {}
+): TrustReceipt {
   const session = parseSessionFile(file);
-  const analysis = analyze(session);
+  const analysis = analyze(session, options);
   return buildReceipt(session, analysis, score(analysis), now);
 }
 
@@ -29,3 +41,5 @@ export { score, type Score } from "./score.js";
 export { latestSession, listSessions } from "./sessions.js";
 export { sign, verify, type SignaturePayload } from "./signer.js";
 export { encodeReceipt } from "./token.js";
+export { collectProjectContext } from "./project.js";
+export type { ProjectAuditContext } from "./analyze.js";

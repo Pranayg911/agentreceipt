@@ -1,7 +1,7 @@
 {
   "name": "agentreceipt",
   "version": "0.1.0",
-  "description": "The signed proof your AI coding agent actually did the work. Drop a Claude Code / Cursor session in and get a Trust Receipt — a score, an archetype, and cited receipts cross-checking every claim ('all tests pass', 'bug fixed') against the session's own tool-call record. Lies caught. ed25519-signed, publicly verifiable.",
+  "description": "Signed verification for AI-generated code work. AgentReceipt reads Claude Code transcripts plus local repo evidence, catches failed checks, skipped verification, and unsupported claims, then emits an ed25519-verifiable Trust Receipt.",
   "type": "module",
   "license": "MIT",
   "keywords": ["ai", "agents", "claude-code", "cursor", "coding-agent", "trust", "eval", "ed25519", "verifiable", "transcript"],
