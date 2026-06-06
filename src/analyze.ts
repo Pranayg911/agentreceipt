@@ -22,6 +22,12 @@ export interface ClaimReceipt {
   evidence: string;
 }
 
+export interface CommandEvidence {
+  command: string;
+  status: "passed" | "failed" | "unknown";
+  exitCode: number | null;
+}
+
 export interface ProjectAuditContext {
   /** Changed files from git status/diff. If omitted, we fall back to transcript edit paths. */
   changedFiles?: string[];
@@ -142,10 +148,13 @@ function isAssertive(sentence: string, matchIdx: number): boolean {
  *  the evidence regex — so `tsc` is shown, not an unrelated earlier segment. */
 function matchWindow(cmd: string, re: RegExp): string {
   const m = new RegExp(re.source, re.flags.replace("g", "")).exec(cmd);
-  if (!m) return cmd.slice(0, 70);
-  const start = Math.max(0, m.index - 6);
+  if (!m) return excerpt(cmd, 70);
+  const start = m.index;
   const frag = cmd.slice(start, m.index + m[0].length + 36).trim();
-  return (start > 0 ? "…" : "") + frag + (m.index + m[0].length + 36 < cmd.length ? "…" : "");
+  return excerpt(
+    frag + (m.index + m[0].length + 36 < cmd.length ? "..." : ""),
+    100
+  );
 }
 
 function bashCommands(toolCalls: ToolCall[]): { call: ToolCall; cmd: string }[] {
@@ -157,14 +166,33 @@ function bashCommands(toolCalls: ToolCall[]): { call: ToolCall; cmd: string }[] 
 function evidenceCommand(cmd: string): string {
   // Do not let heredoc/file contents count as executed commands. Example:
   // `cat > package.json <<EOF ... "test":"vitest" ... EOF` is not a test run.
-  if (/<<\s*['"]?\w+['"]?/.test(cmd)) return cmd.split("\n")[0] ?? cmd;
+  if (/<<\s*['"]?\w+['"]?/.test(cmd)) return redact(cmd.split("\n")[0] ?? cmd);
   // Inline eval scripts often contain sample commands as strings. Treat the
   // outer eval as the evidence, not strings embedded inside the script.
   const evalMatch = /^\s*(node|python3?|ruby|perl)\s+(-e|--eval)\b/.exec(cmd);
   if (evalMatch) {
-    return evalMatch[0];
+    return redact(evalMatch[0]);
   }
-  return cmd;
+  return redact(cmd);
+}
+
+function redact(value: string): string {
+  return value
+    .replace(
+      /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASS|API[_-]?KEY|AUTH|PRIVATE[_-]?KEY)[A-Z0-9_]*)\s*=\s*("[^"]*"|'[^']*'|[^\s]+)/gi,
+      "$1=<redacted>"
+    )
+    .replace(/\b(Bearer|token)\s+[A-Za-z0-9._~+/-]+=*/gi, "$1 <redacted>")
+    .replace(/sk-[A-Za-z0-9_-]{12,}/g, "<redacted-key>");
+}
+
+function compact(value: string): string {
+  return redact(value).replace(/\s+/g, " ").trim();
+}
+
+function excerpt(value: string, max = 260): string {
+  const cleaned = compact(value);
+  return cleaned.length > max ? `${cleaned.slice(0, max - 1)}...` : cleaned;
 }
 
 function uniqueFiles(files: string[]): string[] {
@@ -177,6 +205,17 @@ function touchedFiles(session: ParsedSession): string[] {
   return uniqueFiles(
     session.toolCalls.map((t) => t.touchedFile).filter((f): f is string => !!f)
   );
+}
+
+function changedFilesFor(
+  session: ParsedSession,
+  project?: ProjectAuditContext
+): { files: string[]; source: "git" | "transcript" | "none" } {
+  const gitFiles = uniqueFiles(project?.changedFiles ?? []);
+  if (gitFiles.length > 0) return { files: gitFiles, source: "git" };
+  const transcriptFiles = touchedFiles(session);
+  if (transcriptFiles.length > 0) return { files: transcriptFiles, source: "transcript" };
+  return { files: [], source: "none" };
 }
 
 function fileSummary(files: string[]): string {
@@ -204,6 +243,14 @@ function wasObserved(bash: { call: ToolCall; cmd: string }[], re: RegExp): boole
 
 function passedLast(bash: { call: ToolCall; cmd: string }[], re: RegExp): boolean {
   return lastRelevant(bash, re)?.call.ok === true;
+}
+
+function commandEvidence(bash: { call: ToolCall; cmd: string }[]): CommandEvidence[] {
+  return bash.slice(-12).map(({ call, cmd }) => ({
+    command: excerpt(cmd, 180),
+    status: call.ok ? "passed" : call.exitCode === null ? "unknown" : "failed",
+    exitCode: call.exitCode,
+  }));
 }
 
 function checkFinding(
@@ -240,9 +287,7 @@ function auditWork(
   edits: number,
   project?: ProjectAuditContext
 ): ClaimReceipt[] {
-  const changed = uniqueFiles(
-    project?.changedFiles?.length ? project.changedFiles : touchedFiles(session)
-  );
+  const changed = changedFilesFor(session, project).files;
   if (changed.length === 0) {
     return edits > 0
       ? [
@@ -364,10 +409,15 @@ export interface AnalysisResult {
   counts: { verified: number; contradicted: number; unsupported: number };
   edits: number;
   toolCalls: number;
+  promptExcerpt: string | null;
+  changedFiles: string[];
+  evidenceSource: "git" | "transcript" | "none";
+  commands: CommandEvidence[];
 }
 
 export function analyze(session: ParsedSession, options: AnalyzeOptions = {}): AnalysisResult {
   const bash = bashCommands(session.toolCalls);
+  const changed = changedFilesFor(session, options.project);
   const edits = session.toolCalls.filter((t) =>
     ["Edit", "Write", "NotebookEdit", "MultiEdit"].includes(t.name)
   ).length;
@@ -459,5 +509,17 @@ export function analyze(session: ParsedSession, options: AnalyzeOptions = {}): A
       return true;
     })
     .slice(0, 6);
-  return { receipts: display, counts, edits, toolCalls: session.toolCalls.length };
+  const promptExcerpt =
+    session.userSegments.map((s) => excerpt(s, 320)).find((s) => s.length > 0) ?? null;
+
+  return {
+    receipts: display,
+    counts,
+    edits,
+    toolCalls: session.toolCalls.length,
+    promptExcerpt,
+    changedFiles: changed.files.slice(0, 30),
+    evidenceSource: changed.source,
+    commands: commandEvidence(bash),
+  };
 }

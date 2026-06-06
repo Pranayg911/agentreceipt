@@ -12,6 +12,7 @@
 //   npx agentreceipt verify <file.json>   # verify a saved receipt
 
 import fs from "node:fs";
+import path from "node:path";
 import { spawn } from "node:child_process";
 import {
   collectProjectContext,
@@ -51,6 +52,20 @@ function render(r: TrustReceipt): void {
   console.log(`  ${B}${s.archetype}${X}`);
   console.log(`  ${scoreColor}${B}${s.decision.title}${X}`);
   console.log(`  ${D}${s.summary}${X}`);
+  console.log("");
+  console.log(`  ${B}WHAT HAPPENED${X}`);
+  s.auditTrail.story.forEach((line) => {
+    console.log(`  - ${line}`);
+  });
+  if (s.auditTrail.commands.length > 0) {
+    console.log("");
+    console.log(`  ${B}COMMANDS${X}`);
+    s.auditTrail.commands.slice(0, 5).forEach((cmd) => {
+      const tone = cmd.status === "passed" ? G : cmd.status === "failed" ? R : Y;
+      const exit = cmd.exitCode == null ? "" : ` exit ${cmd.exitCode}`;
+      console.log(`  ${tone}${cmd.status.toUpperCase()}${X} ${cmd.command}${exit}`);
+    });
+  }
   console.log("");
   for (const c of s.claims) {
     const icon =
@@ -167,6 +182,16 @@ function markdownReport(
         )
         .join("\n")
     : "| PASS | none | No claims, edits, or verification gaps found | No issues detected |";
+  const commandRows = s.auditTrail.commands.length
+    ? s.auditTrail.commands
+        .map(
+          (c) =>
+            `| ${markdownEscape(c.status)} | ${markdownEscape(c.command)} | ${
+              c.exitCode == null ? "" : c.exitCode
+            } |`
+        )
+        .join("\n")
+    : "| none | No shell command evidence captured | |";
 
   return [
     `# AgentReceipt ${verdict}`,
@@ -181,6 +206,22 @@ function markdownReport(
     options.minTrust != null ? `**Minimum required:** ${options.minTrust}/100` : null,
     options.url ? `**Signed receipt URL:** ${options.url}` : null,
     s.evidenceNote ? `**Evidence note:** ${s.evidenceNote}` : null,
+    "",
+    "## What Happened",
+    ...s.auditTrail.story.map((line) => `- ${line}`),
+    "",
+    "## Session Context",
+    `**Prompt excerpt:** ${s.auditTrail.promptExcerpt ?? "Not available"}`,
+    `**Changed files:** ${
+      s.auditTrail.changedFiles.length ? s.auditTrail.changedFiles.join(", ") : "None identified"
+    }`,
+    `**Evidence source:** ${s.auditTrail.evidenceSource}`,
+    `**Privacy:** ${s.auditTrail.privacyNote}`,
+    "",
+    "## Commands",
+    "| Status | Command | Exit |",
+    "|---|---|---|",
+    commandRows,
     "",
     `**Stats:** ${st.toolCalls} tool calls / ${st.edits} edits / ${st.verified} verified / ${st.unsupported} gaps / ${st.contradicted} failed`,
     "",
@@ -292,9 +333,16 @@ function main(): void {
     if (format === "text") console.log(`${D}grading ${sess.agent} session: ${sess.path}${X}`);
   }
 
+  const project = collectProjectContext();
+  const relTranscript = path.relative(process.cwd(), file);
+  if (!relTranscript.startsWith("..") && !path.isAbsolute(relTranscript)) {
+    project.changedFiles = project.changedFiles?.filter((changed) => changed !== relTranscript);
+    if (project.changedFiles?.length === 0 && project.source === "git") project.source = "none";
+  }
+
   const receipt = gradeSessionFile(file, Date.now(), {
     agent: agent === "auto" ? "auto" : agent,
-    project: collectProjectContext(),
+    project,
   });
   const shouldOpenWeb = hasFlag(args, WEB_FLAGS);
   const shouldPrintUrl = shouldOpenWeb || hasFlag(args, URL_FLAGS);

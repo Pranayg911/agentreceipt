@@ -27,6 +27,8 @@ export interface ParsedSession {
   assistantText: string;
   /** Per-assistant-message text segments (for locating a claim near its tools). */
   assistantSegments: string[];
+  /** User request text excerpts, used for signed context without storing full transcripts. */
+  userSegments: string[];
   toolCalls: ToolCall[];
   inputTokens: number;
   outputTokens: number;
@@ -100,6 +102,7 @@ export function parseClaudeSessionText(raw: string): ParsedSession {
   const toolUses = new Map<string, ToolCall>();
   const results = new Map<string, { ok: boolean; exitCode: number | null; text: string }>();
   const segments: string[] = [];
+  const userSegments: string[] = [];
   let sessionId = "";
   let inputTokens = 0;
   let outputTokens = 0;
@@ -124,6 +127,10 @@ export function parseClaudeSessionText(raw: string): ParsedSession {
       outputTokens += Number(usage.output_tokens ?? 0) || 0;
     }
     const content = msg.content;
+    if (typeof content === "string" && o.type === "user") {
+      userSegments.push(content);
+      continue;
+    }
     if (!Array.isArray(content)) continue;
 
     for (const block of content) {
@@ -132,6 +139,8 @@ export function parseClaudeSessionText(raw: string): ParsedSession {
       const bt = b.type;
       if (bt === "text" && o.type === "assistant") {
         segments.push(String(b.text ?? ""));
+      } else if (bt === "text" && o.type === "user") {
+        userSegments.push(String(b.text ?? ""));
       } else if (bt === "tool_use") {
         const input = (b.input as Record<string, unknown>) ?? {};
         const name = String(b.name ?? "");
@@ -166,6 +175,7 @@ export function parseClaudeSessionText(raw: string): ParsedSession {
     agent: "claude",
     assistantText: segments.join("\n\n"),
     assistantSegments: segments,
+    userSegments,
     toolCalls: [...toolUses.values()],
     inputTokens,
     outputTokens,
@@ -236,6 +246,7 @@ export function parseCodexSessionText(raw: string, filePath?: string): ParsedSes
   const toolUses = new Map<string, ToolCall>();
   const results = new Map<string, { ok: boolean; exitCode: number | null; text: string }>();
   const segments: string[] = [];
+  const userSegments: string[] = [];
   let sessionId = "";
   let inputTokens = 0;
   let outputTokens = 0;
@@ -266,6 +277,9 @@ export function parseCodexSessionText(raw: string, filePath?: string): ParsedSes
     if (o.type === "event_msg") {
       if (payload.type === "agent_message" && typeof payload.message === "string") {
         segments.push(payload.message);
+      }
+      if (payload.type === "user_message" && typeof payload.message === "string") {
+        userSegments.push(payload.message);
       }
       if (payload.type === "user_message" && !sessionId && typeof payload.client_id === "string") {
         sessionId = payload.client_id;
@@ -299,6 +313,9 @@ export function parseCodexSessionText(raw: string, filePath?: string): ParsedSes
     if (payload.type === "message" && payload.role === "assistant") {
       const text = contentBlocksText(payload.content);
       if (text) segments.push(text);
+    } else if (payload.type === "message" && payload.role === "user") {
+      const text = contentBlocksText(payload.content);
+      if (text) userSegments.push(text);
     } else if (payload.type === "function_call" || payload.type === "custom_tool_call") {
       const rawName = String(payload.name ?? "");
       const name = normalizeCodexToolName(rawName);
@@ -334,6 +351,7 @@ export function parseCodexSessionText(raw: string, filePath?: string): ParsedSes
     agent: "codex",
     assistantText: segments.join("\n\n"),
     assistantSegments: segments,
+    userSegments,
     toolCalls: [...toolUses.values()],
     inputTokens,
     outputTokens,
@@ -366,6 +384,7 @@ export function parseCursorCheckpointText(raw: string, filePath?: string): Parse
     assistantText:
       "Cursor checkpoint detected. Full Cursor chat/tool transcript was not available, so AgentReceipt audited changed-file evidence only.",
     assistantSegments: [],
+    userSegments: [],
     toolCalls,
     inputTokens: 0,
     outputTokens: 0,

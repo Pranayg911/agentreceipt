@@ -21,6 +21,8 @@ AgentReceipt answers: did the agent actually verify the work it produced, and wh
 
 It checks the agent transcript against local repo evidence, then signs the result so anyone can inspect the receipt without trusting another model's opinion.
 
+Receipts include redacted, length-capped context: user request excerpt, changed files, observed commands, top issues, and next actions. They do not embed the full raw transcript by default.
+
 ## What It Catches
 
 | Evidence | What AgentReceipt verifies |
@@ -43,6 +45,17 @@ It checks the agent transcript against local repo evidence, then signs the resul
   The Optimist
   Do not merge yet
   Trust 69/100 because AgentReceipt found 1 failed or contradicted finding and 1 unproven gap. Fix the failed evidence before merge.
+
+  WHAT HAPPENED
+  - User asked: "Make AgentReceipt show whether the AI actually verified its code before I merge it."
+  - Files changed: src/cli.ts, src/receipt.ts, src/analyze.ts, README.md.
+  - Commands observed: 2 total (1 passed, 1 failed, 0 unknown).
+  - Top issue: Tests failed during the session - `npm test` exited 1
+  - Decision: Do not merge yet.
+
+  COMMANDS
+  FAILED npm test exit 1
+  PASSED npm run typecheck exit 0
 
   FAIL Tests failed during the session
      tests failed after 5 changed files - `npm test` exited 1

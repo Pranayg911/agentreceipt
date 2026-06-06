@@ -2,7 +2,7 @@
 
 import { sign, verify, type SignaturePayload } from "./signer.js";
 import type { JsonValue } from "./stable-json.js";
-import type { AnalysisResult, ClaimReceipt } from "./analyze.js";
+import type { AnalysisResult, ClaimReceipt, CommandEvidence } from "./analyze.js";
 import type { Score } from "./score.js";
 import type { ParsedSession } from "./parse.js";
 
@@ -20,6 +20,14 @@ export interface TrustReceipt {
     };
     summary: string;
     nextActions: string[];
+    auditTrail: {
+      promptExcerpt: string | null;
+      changedFiles: string[];
+      evidenceSource: "git" | "transcript" | "none";
+      commands: CommandEvidence[];
+      story: string[];
+      privacyNote: string;
+    };
     claims: ClaimReceipt[];
     evidenceNote?: string;
     stats: {
@@ -150,6 +158,41 @@ function nextActionsFor(analysis: AnalysisResult): string[] {
   ];
 }
 
+function listPreview(items: string[], empty: string): string {
+  if (items.length === 0) return empty;
+  const shown = items.slice(0, 4).join(", ");
+  return `${shown}${items.length > 4 ? `, and ${items.length - 4} more` : ""}`;
+}
+
+function storyFor(
+  analysis: AnalysisResult,
+  decision: TrustReceipt["body"]["decision"]
+): string[] {
+  const commands = analysis.commands;
+  const failed = commands.filter((c) => c.status === "failed").length;
+  const unknown = commands.filter((c) => c.status === "unknown").length;
+  const passed = commands.filter((c) => c.status === "passed").length;
+  const topIssue = analysis.receipts.find((r) => r.status !== "verified");
+
+  return [
+    analysis.promptExcerpt
+      ? `User asked: "${analysis.promptExcerpt}"`
+      : "No user prompt text was available in the parsed session artifact.",
+    analysis.changedFiles.length > 0
+      ? `Files changed: ${listPreview(analysis.changedFiles, "none")}.`
+      : analysis.edits > 0
+        ? `${analysis.edits} edit tool call(s) were recorded, but no file paths were available.`
+        : "No file edits were identified in the session.",
+    commands.length > 0
+      ? `Commands observed: ${commands.length} total (${passed} passed, ${failed} failed, ${unknown} unknown).`
+      : "No shell command evidence was captured.",
+    topIssue
+      ? `Top issue: ${topIssue.claim} - ${topIssue.evidence}`
+      : "No failed or unproven findings were detected.",
+    `Decision: ${decision.title}.`,
+  ];
+}
+
 export function buildReceipt(
   session: ParsedSession,
   analysis: AnalysisResult,
@@ -165,6 +208,15 @@ export function buildReceipt(
     decision,
     summary: summaryFor(analysis, sc),
     nextActions: nextActionsFor(analysis),
+    auditTrail: {
+      promptExcerpt: analysis.promptExcerpt,
+      changedFiles: analysis.changedFiles,
+      evidenceSource: analysis.evidenceSource,
+      commands: analysis.commands,
+      story: storyFor(analysis, decision),
+      privacyNote:
+        "Prompt and command text is redacted and length-capped. The full raw transcript is not embedded in the receipt.",
+    },
     claims: analysis.receipts,
     ...(session.evidenceNote ? { evidenceNote: session.evidenceNote } : {}),
     stats: {
