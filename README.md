@@ -2,7 +2,7 @@
 
 **Signed evidence for AI-generated code work.**
 
-AgentReceipt turns a coding-agent session into a verifiable Trust Receipt: what changed, what was checked, what failed, what was skipped, and whether the final claims are backed by real tool evidence.
+AgentReceipt turns a coding-agent session into a verifiable Trust Receipt: what changed, what was checked, what failed, what was skipped, whether the final claims are backed by real tool evidence, and what should happen next.
 
 Live product: https://agentreceipt.vercel.app
 
@@ -17,7 +17,7 @@ AI coding agents can edit files, run commands, and confidently say "done." That 
 
 CI answers: did this configured command pass?
 
-AgentReceipt answers: did the agent actually verify the work it produced?
+AgentReceipt answers: did the agent actually verify the work it produced, and what should the reviewer do next?
 
 It checks the agent transcript against local repo evidence, then signs the result so anyone can inspect the receipt without trusting another model's opinion.
 
@@ -41,6 +41,8 @@ It checks the agent transcript against local repo evidence, then signs the resul
 
   TRUST  69/100   ##############------
   The Optimist
+  Do not merge yet
+  Trust 69/100 because AgentReceipt found 1 failed or contradicted finding and 1 unproven gap. Fix the failed evidence before merge.
 
   FAIL Tests failed during the session
      tests failed after 5 changed files - `npm test` exited 1
@@ -48,6 +50,10 @@ It checks the agent transcript against local repo evidence, then signs the resul
      package.json has a build script, but no build command was observed
   PASS Typecheck ran after changes
      typecheck passed after 5 changed files - `tsc --noEmit` exited 0
+
+  NEXT
+  1. Fix the failing tests, rerun the test command after the final edit, then regenerate the receipt.
+  2. Run the repo build after the final edit so reviewers can trust the artifact.
 
   138 tool calls / 5 edits / 1 verified / 1 gap / 1 failed / ~$4.18
   PASS ed25519 signed & verifiable   key HS3Qs3Bhqp...
@@ -134,7 +140,7 @@ AgentReceipt is not an LLM judge. Models can make AgentReceipt better by running
 - Shareable web receipts that do not require raw transcript uploads.
 - CI thresholds that fail merges when evidence is weak.
 
-That is the product wedge: AI agents create the work; AgentReceipt proves whether the work earned trust.
+That is the product wedge: AI agents create the work; AgentReceipt proves whether the work earned trust and tells teams the next safest action.
 
 ## Library
 
@@ -152,7 +158,7 @@ receipt.body.claims;    // signed evidence findings
 
 ## Status
 
-`v0.1` supports Claude Code transcripts, Codex rollout logs, Cursor checkpoint metadata, deterministic claim checking, repo-aware skipped-check detection, ed25519 signing, offline verification, self-contained web receipt URLs, CI thresholds, markdown/json reports, and a GitHub Action.
+`v0.1` supports Claude Code transcripts, Codex rollout logs, Cursor checkpoint metadata, deterministic claim checking, repo-aware skipped-check detection, signed decisions, next-action guidance, ed25519 signing, offline verification, self-contained web receipt URLs, CI thresholds, markdown/json reports, and a GitHub Action.
 
 Next: CI log ingestion, richer Cursor transcript parsing, policy packs, team ledgers, and first-class npm distribution.
 

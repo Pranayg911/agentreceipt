@@ -49,6 +49,8 @@ function render(r: TrustReceipt): void {
   console.log("");
   console.log(`  TRUST  ${scoreColor}${B}${s.trust}${X}/100   ${bar(s.trust)}`);
   console.log(`  ${B}${s.archetype}${X}`);
+  console.log(`  ${scoreColor}${B}${s.decision.title}${X}`);
+  console.log(`  ${D}${s.summary}${X}`);
   console.log("");
   for (const c of s.claims) {
     const icon =
@@ -61,6 +63,13 @@ function render(r: TrustReceipt): void {
   }
   if (s.evidenceNote) {
     console.log(`  ${Y}note${X} ${s.evidenceNote}`);
+  }
+  if (s.nextActions.length > 0) {
+    console.log("");
+    console.log(`  ${B}NEXT${X}`);
+    s.nextActions.forEach((action, i) => {
+      console.log(`  ${i + 1}. ${action}`);
+    });
   }
   console.log("");
   const st = s.stats;
@@ -164,6 +173,8 @@ function markdownReport(
     "",
     `**Trust:** ${s.trust}/100`,
     `**Archetype:** ${s.archetype}`,
+    `**Decision:** ${s.decision.title}`,
+    `**Summary:** ${s.summary}`,
     `**Agent:** ${s.agent}`,
     `**Receipt:** ${r.receiptId}`,
     `**Signature:** ${v.valid ? "valid" : `invalid (${v.reason})`}`,
@@ -176,6 +187,9 @@ function markdownReport(
     "| Status | Kind | Finding | Evidence |",
     "|---|---|---|---|",
     rows,
+    "",
+    "## Next Actions",
+    ...s.nextActions.map((action) => `- ${action}`),
     "",
     "_AgentReceipt verifies AI-generated work with deterministic transcript, command, git, and package evidence. It is not an LLM judge._",
     "",

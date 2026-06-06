@@ -383,6 +383,9 @@ function detectFormat(raw: string, filePath?: string): AgentKind {
   }
   const first = raw.split("\n").find((l) => l.trim());
   const parsed = first ? parseJsonLine(first) : null;
+  if (parsed?.agentRequestId && Array.isArray(parsed.requestFiles)) {
+    return "cursor";
+  }
   if (parsed?.type === "session_meta" || parsed?.type === "response_item" || parsed?.type === "event_msg") {
     return "codex";
   }
