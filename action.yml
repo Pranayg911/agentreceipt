@@ -18,6 +18,10 @@ inputs:
     description: Optional transcript/checkpoint JSON or JSONL file available on the workflow runner.
     required: false
     default: ""
+  allow-warnings:
+    description: "Allow unproven verification gaps to pass CI. Failed/contradicted evidence still fails."
+    required: false
+    default: "false"
   comment:
     description: "Comment the markdown receipt on pull requests. Requires pull-requests: write."
     required: false
@@ -39,6 +43,7 @@ runs:
         INPUT_MIN_TRUST: ${{ inputs.min-trust }}
         INPUT_WEB_URL: ${{ inputs.web-url }}
         INPUT_SESSION_FILE: ${{ inputs.session-file }}
+        INPUT_ALLOW_WARNINGS: ${{ inputs.allow-warnings }}
         INPUT_COMMENT: ${{ inputs.comment }}
         GH_TOKEN: ${{ github.token }}
       run: |
@@ -48,6 +53,10 @@ runs:
         if [ -n "$INPUT_SESSION_FILE" ]; then
           SESSION_ARG=("$INPUT_SESSION_FILE")
         fi
+        WARNING_ARG=()
+        if [ "$INPUT_ALLOW_WARNINGS" = "true" ]; then
+          WARNING_ARG=(--allow-warnings)
+        fi
 
         node "${{ github.action_path }}/dist/cli.js" \
           --ci \
@@ -56,6 +65,7 @@ runs:
           --format markdown \
           --output "$REPORT" \
           --url "$INPUT_WEB_URL" \
+          "${WARNING_ARG[@]}" \
           "${SESSION_ARG[@]}"
         STATUS=$?
 

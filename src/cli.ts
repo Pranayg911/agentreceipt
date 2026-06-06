@@ -6,6 +6,7 @@
 //   npx agentreceipt --web        # grade and open a web receipt
 //   npx agentreceipt --agent codex # force one adapter: claude, codex, cursor
 //   npx agentreceipt --ci --min-trust 80 # fail CI below a trust threshold
+//   npx agentreceipt --ci --allow-warnings # allow unproven gaps, but still fail contradictions
 //   npx agentreceipt --url        # grade and print a web receipt URL
 //   npx agentreceipt --all        # grade the most recent session anywhere
 //   npx agentreceipt <file.jsonl> # grade a specific transcript
@@ -51,6 +52,8 @@ function render(r: TrustReceipt): void {
   console.log(`  TRUST  ${scoreColor}${B}${s.trust}${X}/100   ${bar(s.trust)}`);
   console.log(`  ${B}${s.archetype}${X}`);
   console.log(`  ${scoreColor}${B}${s.decision.title}${X}`);
+  const gateColor = s.mergeGate.status === "pass" ? G : s.mergeGate.status === "warn" ? Y : R;
+  console.log(`  ${gateColor}${B}${s.mergeGate.title}${X} ${D}${s.mergeGate.reason}${X}`);
   console.log(`  ${D}${s.summary}${X}`);
   console.log("");
   console.log(`  ${B}WHAT HAPPENED${X}`);
@@ -162,6 +165,11 @@ function statusLabel(status: string): string {
   return "GAP";
 }
 
+function mergeGatePass(r: TrustReceipt, allowWarnings: boolean): boolean {
+  const status = r.body.mergeGate.status;
+  return allowWarnings ? status !== "fail" : status === "pass";
+}
+
 function markdownEscape(s: string): string {
   return s.replace(/\|/g, "\\|").replace(/\n+/g, " ").trim();
 }
@@ -199,6 +207,8 @@ function markdownReport(
     `**Trust:** ${s.trust}/100`,
     `**Archetype:** ${s.archetype}`,
     `**Decision:** ${s.decision.title}`,
+    `**Merge gate:** ${s.mergeGate.title} (${s.mergeGate.status})`,
+    `**Gate reason:** ${s.mergeGate.reason}`,
     `**Summary:** ${s.summary}`,
     `**Agent:** ${s.agent}`,
     `**Receipt:** ${r.receiptId}`,
@@ -250,6 +260,7 @@ function jsonReport(
       minTrust: options.minTrust ?? null,
       url: options.url ?? null,
       signature,
+      mergeGate: r.body.mergeGate,
       receipt: r,
     },
     null,
@@ -303,6 +314,7 @@ function main(): void {
   const format = formatFromArgs(args);
   const ci = args.includes("--ci");
   const minTrust = numberForFlag(args, "--min-trust") ?? (ci ? 80 : null);
+  const allowWarnings = args.includes("--allow-warnings") || args.includes("--score-only");
   const output = valueForFlag(args, "--output");
   const agent = agentFromArgs(args);
 
@@ -350,7 +362,10 @@ function main(): void {
   const baseUrl = valueAfterFlag(args, [...WEB_FLAGS, ...URL_FLAGS]) ?? DEFAULT_WEB_URL;
   const url = wantsReportUrl ? receiptUrl(receipt, baseUrl) : undefined;
   const signature = verifyReceipt(receipt);
-  const passed = signature.valid && (minTrust == null || receipt.body.trust >= minTrust);
+  const thresholdPassed = minTrust == null || receipt.body.trust >= minTrust;
+  const shouldGateDecision = ci || minTrust != null;
+  const gatePassed = !shouldGateDecision || mergeGatePass(receipt, allowWarnings);
+  const passed = signature.valid && thresholdPassed && gatePassed;
 
   if (format === "text") {
     render(receipt);
@@ -370,8 +385,15 @@ function main(): void {
       const color = passed ? G : R;
       console.log(
         `  ${color}${passed ? "PASS" : "FAIL"}${X} trust ${receipt.body.trust}/100 ` +
-          `${passed ? ">=" : "<"} required ${minTrust}/100`
+          `${thresholdPassed ? ">=" : "<"} required ${minTrust}/100`
       );
+      console.log(
+        `  ${gatePassed ? G : R}${gatePassed ? "PASS" : "FAIL"}${X} ` +
+          `${receipt.body.mergeGate.title}: ${receipt.body.mergeGate.reason}`
+      );
+      if (allowWarnings) {
+        console.log(`  ${Y}allow-warnings enabled: unproven gaps do not fail this gate${X}`);
+      }
       console.log("");
     }
 

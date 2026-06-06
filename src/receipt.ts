@@ -18,6 +18,12 @@ export interface TrustReceipt {
       label: "ready" | "verify_first" | "do_not_merge" | "no_evidence";
       title: string;
     };
+    mergeGate: {
+      status: "pass" | "warn" | "fail";
+      title: string;
+      reason: string;
+      blocking: boolean;
+    };
     summary: string;
     nextActions: string[];
     auditTrail: {
@@ -99,6 +105,48 @@ function summaryFor(analysis: AnalysisResult, sc: Score): string {
     return `Trust ${sc.trust}/100. The session recorded edits but no explicit success claims; review the diff and run normal repo checks.`;
   }
   return `Trust ${sc.trust}/100 because no edits or verification evidence were found in this session. Run AgentReceipt after an actual coding-agent change.`;
+}
+
+function mergeGateFor(
+  decision: TrustReceipt["body"]["decision"],
+  analysis: AnalysisResult
+): TrustReceipt["body"]["mergeGate"] {
+  if (decision.label === "ready") {
+    return {
+      status: "pass",
+      title: "Merge gate passed",
+      reason: "No failed or unproven findings were detected in the signed evidence.",
+      blocking: false,
+    };
+  }
+  if (decision.label === "verify_first") {
+    return {
+      status: "warn",
+      title: "Merge gate blocked by missing proof",
+      reason: `${plural(
+        analysis.counts.unsupported,
+        "finding"
+      )} still need evidence before this should pass an AI-code merge gate.`,
+      blocking: true,
+    };
+  }
+  if (decision.label === "do_not_merge") {
+    return {
+      status: "fail",
+      title: "Merge gate failed",
+      reason: `${plural(
+        analysis.counts.contradicted,
+        "failed or contradicted finding"
+      )} must be fixed before merge.`,
+      blocking: true,
+    };
+  }
+  return {
+    status: "fail",
+    title: "Merge gate failed",
+    reason: "No code-work evidence was available to verify.",
+    blocking: true,
+  };
 }
 
 function actionForClaim(claim: ClaimReceipt): string | null {
@@ -200,12 +248,14 @@ export function buildReceipt(
   generatedAt: number
 ): TrustReceipt {
   const decision = decisionFor(analysis, sc);
+  const mergeGate = mergeGateFor(decision, analysis);
   const body = {
     sessionId: session.sessionId || "unknown",
     agent: session.agent,
     trust: sc.trust,
     archetype: sc.archetype,
     decision,
+    mergeGate,
     summary: summaryFor(analysis, sc),
     nextActions: nextActionsFor(analysis),
     auditTrail: {

@@ -2,7 +2,7 @@
 
 **Signed evidence for AI-generated code work.**
 
-AgentReceipt turns a coding-agent session into a verifiable Trust Receipt: what changed, what was checked, what failed, what was skipped, whether the final claims are backed by real tool evidence, and what should happen next.
+AgentReceipt turns a coding-agent session into a verifiable Trust Receipt: what changed, what was checked, what failed, what was skipped, whether the final claims are backed by real tool evidence, and whether the PR should pass, warn, or fail a signed merge gate.
 
 Live product: https://agentreceipt.vercel.app
 
@@ -17,11 +17,11 @@ AI coding agents can edit files, run commands, and confidently say "done." That 
 
 CI answers: did this configured command pass?
 
-AgentReceipt answers: did the agent actually verify the work it produced, and what should the reviewer do next?
+AgentReceipt answers: did the agent actually verify the work it produced, should this AI-code PR be allowed to merge, and what should the reviewer do next?
 
 It checks the agent transcript against local repo evidence, then signs the result so anyone can inspect the receipt without trusting another model's opinion.
 
-Receipts include redacted, length-capped context: user request excerpt, changed files, observed commands, top issues, and next actions. They do not embed the full raw transcript by default.
+Receipts include redacted, length-capped context: user request excerpt, changed files, observed commands, top issues, signed merge-gate status, and next actions. They do not embed the full raw transcript by default.
 
 ## What It Catches
 
@@ -44,6 +44,7 @@ Receipts include redacted, length-capped context: user request excerpt, changed 
   TRUST  69/100   ##############------
   The Optimist
   Do not merge yet
+  Merge gate failed  1 failed or contradicted finding must be fixed before merge.
   Trust 69/100 because AgentReceipt found 1 failed or contradicted finding and 1 unproven gap. Fix the failed evidence before merge.
 
   WHAT HAPPENED
@@ -83,6 +84,9 @@ npx --yes github:Pranayg911/agentreceipt --url
 
 # CI-friendly failure gate. Defaults to the live Vercel receipt viewer.
 npx --yes github:Pranayg911/agentreceipt --ci --min-trust 80
+
+# Early-adopter mode: missing proof warns, failed evidence still blocks.
+npx --yes github:Pranayg911/agentreceipt --ci --min-trust 80 --allow-warnings
 
 # Machine-readable reports.
 npx --yes github:Pranayg911/agentreceipt --format json
@@ -134,6 +138,13 @@ jobs:
 
 The Action writes a markdown receipt to the GitHub Actions step summary. With `comment: true`, it also comments the receipt on the pull request.
 
+By default, CI requires both:
+
+- `trust >= min-trust`
+- signed merge gate status `pass`
+
+Set `allow-warnings: true` only if you want unproven gaps to pass during rollout. Failed or contradicted evidence still fails the gate.
+
 Cloud runners cannot read agent logs stored on your laptop. If the transcript/checkpoint is produced earlier in CI, pass it explicitly:
 
 ```yaml
@@ -143,6 +154,13 @@ Cloud runners cannot read agent logs stored on your laptop. If the transcript/ch
     min-trust: 80
 ```
 
+```yaml
+- uses: Pranayg911/agentreceipt@main
+  with:
+    min-trust: 80
+    allow-warnings: true
+```
+
 ## Why Models Do Not Replace It
 
 AgentReceipt is not an LLM judge. Models can make AgentReceipt better by running more checks, producing richer transcripts, and attaching more evidence. But the trust layer remains outside the model:
@@ -150,8 +168,9 @@ AgentReceipt is not an LLM judge. Models can make AgentReceipt better by running
 - Deterministic analysis, not vibes.
 - Repo-aware skipped-check detection.
 - Signed receipts that can be verified offline.
+- Signed merge-gate decisions that CI can enforce.
 - Shareable web receipts that do not require raw transcript uploads.
-- CI thresholds that fail merges when evidence is weak.
+- CI thresholds that fail merges when evidence is weak or contradicted.
 
 That is the product wedge: AI agents create the work; AgentReceipt proves whether the work earned trust and tells teams the next safest action.
 
@@ -171,7 +190,7 @@ receipt.body.claims;    // signed evidence findings
 
 ## Status
 
-`v0.1` supports Claude Code transcripts, Codex rollout logs, Cursor checkpoint metadata, deterministic claim checking, repo-aware skipped-check detection, signed decisions, next-action guidance, ed25519 signing, offline verification, self-contained web receipt URLs, CI thresholds, markdown/json reports, and a GitHub Action.
+`v0.1` supports Claude Code transcripts, Codex rollout logs, Cursor checkpoint metadata, deterministic claim checking, repo-aware skipped-check detection, signed decisions, signed merge gates, next-action guidance, ed25519 signing, offline verification, self-contained web receipt URLs, CI enforcement, markdown/json reports, and a GitHub Action.
 
 Next: CI log ingestion, richer Cursor transcript parsing, policy packs, team ledgers, and first-class npm distribution.
 
