@@ -13,7 +13,7 @@ inputs:
   web-url:
     description: Base URL for signed web receipt links.
     required: false
-    default: "https://agentreceipt.dev"
+    default: "https://agentreceipt.vercel.app"
   session-file:
     description: Optional transcript/checkpoint JSON or JSONL file available on the workflow runner.
     required: false

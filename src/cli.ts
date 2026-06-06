@@ -24,7 +24,7 @@ import {
 import { latestSession } from "./sessions.js";
 
 const G = "\x1b[32m", R = "\x1b[31m", Y = "\x1b[33m", D = "\x1b[2m", B = "\x1b[1m", X = "\x1b[0m";
-const DEFAULT_WEB_URL = process.env.AGENTRECEIPT_WEB_URL ?? "https://agentreceipt.dev";
+const DEFAULT_WEB_URL = process.env.AGENTRECEIPT_WEB_URL ?? "https://agentreceipt.vercel.app";
 const WEB_FLAGS = ["--web", "--open"];
 const URL_FLAGS = ["--url", "--print-url"];
 const AGENTS = new Set(["auto", "claude", "codex", "cursor"]);
