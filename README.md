@@ -165,7 +165,8 @@ Next: CI log ingestion, richer Cursor transcript parsing, policy packs, team led
 ## Links
 
 - Product: https://agentreceipt.vercel.app
-- Repository: https://github.com/Pranayg911/agentreceipt
+- Core repository: https://github.com/Pranayg911/agentreceipt
+- Web app source: https://github.com/Pranayg911/agentreceipt-web
 
 ## License
 
