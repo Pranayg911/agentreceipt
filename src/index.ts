@@ -38,7 +38,14 @@ export function gradeSessionFile(
 export { verifyReceipt };
 export type { TrustReceipt };
 export { parseSessionFile, parseSessionText } from "./parse.js";
-export { analyze, type AnalysisResult, type ClaimReceipt } from "./analyze.js";
+export {
+  analyze,
+  type AgentReceiptPolicy,
+  type AnalysisResult,
+  type CiCheckEvidence,
+  type ClaimReceipt,
+  type PolicyRequirement,
+} from "./analyze.js";
 export { score, type Score } from "./score.js";
 export { latestSession, listSessions, type AgentKind, type SessionFile } from "./sessions.js";
 export { sign, verify, type SignaturePayload } from "./signer.js";

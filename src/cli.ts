@@ -7,6 +7,8 @@
 //   npx agentreceipt --agent codex # force one adapter: claude, codex, cursor
 //   npx agentreceipt --ci --min-trust 80 # fail CI below a trust threshold
 //   npx agentreceipt --ci --allow-warnings # allow unproven gaps, but still fail contradictions
+//   npx agentreceipt --ci-evidence checks.json # attach GitHub/check-run evidence
+//   npx agentreceipt --policy .agentreceipt.json # enforce team policy gates
 //   npx agentreceipt --url        # grade and print a web receipt URL
 //   npx agentreceipt --all        # grade the most recent session anywhere
 //   npx agentreceipt <file.jsonl> # grade a specific transcript
@@ -31,8 +33,16 @@ const WEB_FLAGS = ["--web", "--open"];
 const URL_FLAGS = ["--url", "--print-url"];
 const AGENTS = new Set(["auto", "claude", "codex", "cursor"]);
 const FORMATS = new Set(["text", "json", "markdown"]);
-const VALUE_FLAGS = new Set(["--agent", "--format", "--min-trust", "--output"]);
+const VALUE_FLAGS = new Set([
+  "--agent",
+  "--format",
+  "--min-trust",
+  "--output",
+  "--ci-evidence",
+  "--policy",
+]);
 type ReportFormat = "text" | "json" | "markdown";
+const COMMENT_MARKER = "<!-- agentreceipt:pr-comment -->";
 
 function bar(score: number): string {
   const n = Math.round(score / 5);
@@ -69,6 +79,18 @@ function render(r: TrustReceipt): void {
       console.log(`  ${tone}${cmd.status.toUpperCase()}${X} ${cmd.command}${exit}`);
     });
   }
+  if (s.auditTrail.ciChecks.length > 0) {
+    console.log("");
+    console.log(`  ${B}EXTERNAL CI${X}`);
+    s.auditTrail.ciChecks.slice(0, 6).forEach((check) => {
+      const failed = ["failure", "cancelled", "timed_out", "action_required", "startup_failure"].includes(
+        check.conclusion ?? ""
+      );
+      const passed = check.status === "completed" && check.conclusion === "success";
+      const tone = passed ? G : failed ? R : Y;
+      console.log(`  ${tone}${ciStatusLabel(check)}${X} ${check.name}`);
+    });
+  }
   console.log("");
   for (const c of s.claims) {
     const icon =
@@ -94,6 +116,8 @@ function render(r: TrustReceipt): void {
   console.log(
     `  ${D}${st.toolCalls} tool calls · ${st.edits} edits · ` +
       `${G}${st.verified} verified${X}${D} · ${Y}${st.unsupported} gaps${X}${D} · ${R}${st.contradicted} failed${X}` +
+      `${st.policyViolations ? `${D} · ${R}${st.policyViolations} policy${X}` : ""}` +
+      `${st.ciChecks ? `${D} · ${st.ciChecks} CI${X}` : ""}` +
       `${D} · ~$${st.approxCostUsd}${X}`
   );
   console.log(
@@ -165,6 +189,18 @@ function statusLabel(status: string): string {
   return "GAP";
 }
 
+function ciStatusLabel(
+  check: TrustReceipt["body"]["auditTrail"]["ciChecks"][number]
+): string {
+  if (check.status === "completed" && check.conclusion === "success") return "PASS";
+  if (["failure", "cancelled", "timed_out", "action_required", "startup_failure"].includes(
+    check.conclusion ?? ""
+  )) {
+    return "FAIL";
+  }
+  return "PENDING";
+}
+
 function mergeGatePass(r: TrustReceipt, allowWarnings: boolean): boolean {
   const status = r.body.mergeGate.status;
   return allowWarnings ? status !== "fail" : status === "pass";
@@ -182,6 +218,14 @@ function markdownReport(
   const st = s.stats;
   const v = verifyReceipt(r);
   const verdict = options.passed ? "PASS" : "FAIL";
+  const threshold = options.minTrust == null ? "not set" : `${s.trust}/${options.minTrust}`;
+  const thresholdStatus =
+    options.minTrust == null ? "INFO" : s.trust >= options.minTrust ? "PASS" : "FAIL";
+  const primaryAction =
+    s.nextActions[0] ??
+    (options.passed
+      ? "Review the diff normally and keep this receipt with the PR."
+      : "Resolve the blocking finding, then rerun AgentReceipt.");
   const rows = s.claims.length
     ? s.claims
         .map(
@@ -200,21 +244,41 @@ function markdownReport(
         )
         .join("\n")
     : "| none | No shell command evidence captured | |";
+  const ciRows = s.auditTrail.ciChecks.length
+    ? s.auditTrail.ciChecks
+        .map(
+          (c) =>
+            `| ${ciStatusLabel(c)} | ${markdownEscape(c.name)} | ${markdownEscape(
+              c.conclusion ?? c.status
+            )} |${c.detailsUrl ? ` [open](${c.detailsUrl})` : ""} |`
+        )
+        .join("\n")
+    : "| none | No external CI evidence attached | | |";
+  const policyLine = s.policy?.require?.length
+    ? `\`${s.policy.require.join("`, `")}\``
+    : "No team policy configured";
 
   return [
+    COMMENT_MARKER,
+    "",
     `# AgentReceipt ${verdict}`,
     "",
-    `**Trust:** ${s.trust}/100`,
-    `**Archetype:** ${s.archetype}`,
-    `**Decision:** ${s.decision.title}`,
-    `**Merge gate:** ${s.mergeGate.title} (${s.mergeGate.status})`,
-    `**Gate reason:** ${s.mergeGate.reason}`,
-    `**Summary:** ${s.summary}`,
-    `**Agent:** ${s.agent}`,
+    `**Reviewer move:** ${primaryAction}`,
+    "",
+    "| Gate | Result | Detail |",
+    "|---|---:|---|",
+    `| Trust threshold | ${thresholdStatus} | ${threshold} |`,
+    `| Signed merge gate | ${s.mergeGate.status.toUpperCase()} | ${markdownEscape(
+      `${s.mergeGate.title}: ${s.mergeGate.reason}`
+    )} |`,
+    `| Signature | ${v.valid ? "PASS" : "FAIL"} | ${v.valid ? `ed25519 key ${r.signature.fingerprint}` : markdownEscape(v.reason ?? "invalid")} |`,
+    `| Team policy | ${st.policyViolations > 0 ? "FAIL" : "INFO"} | ${policyLine} |`,
+    "",
+    `> ${s.summary}`,
+    "",
+    options.url ? `**Signed web receipt:** ${options.url}` : null,
+    `**Agent/session:** ${s.agent} / ${s.sessionId.slice(0, 12)}`,
     `**Receipt:** ${r.receiptId}`,
-    `**Signature:** ${v.valid ? "valid" : `invalid (${v.reason})`}`,
-    options.minTrust != null ? `**Minimum required:** ${options.minTrust}/100` : null,
-    options.url ? `**Signed receipt URL:** ${options.url}` : null,
     s.evidenceNote ? `**Evidence note:** ${s.evidenceNote}` : null,
     "",
     "## What Happened",
@@ -228,13 +292,19 @@ function markdownReport(
     `**Evidence source:** ${s.auditTrail.evidenceSource}`,
     `**Privacy:** ${s.auditTrail.privacyNote}`,
     "",
-    "## Commands",
+    "## Commands Observed",
     "| Status | Command | Exit |",
     "|---|---|---|",
     commandRows,
     "",
-    `**Stats:** ${st.toolCalls} tool calls / ${st.edits} edits / ${st.verified} verified / ${st.unsupported} gaps / ${st.contradicted} failed`,
+    "## External CI",
+    "| Status | Check | Result | Link |",
+    "|---|---|---|---|",
+    ciRows,
     "",
+    `**Stats:** ${st.toolCalls} tool calls / ${st.edits} edits / ${st.verified} verified / ${st.unsupported} gaps / ${st.contradicted} failed / ${st.policyViolations} policy violations / ${st.ciChecks} CI checks`,
+    "",
+    "## Findings",
     "| Status | Kind | Finding | Evidence |",
     "|---|---|---|---|",
     rows,
@@ -261,6 +331,8 @@ function jsonReport(
       url: options.url ?? null,
       signature,
       mergeGate: r.body.mergeGate,
+      policy: r.body.policy ?? null,
+      ciChecks: r.body.auditTrail.ciChecks,
       receipt: r,
     },
     null,
@@ -313,9 +385,10 @@ function main(): void {
   const args = process.argv.slice(2);
   const format = formatFromArgs(args);
   const ci = args.includes("--ci");
-  const minTrust = numberForFlag(args, "--min-trust") ?? (ci ? 80 : null);
-  const allowWarnings = args.includes("--allow-warnings") || args.includes("--score-only");
+  const cliMinTrust = numberForFlag(args, "--min-trust");
   const output = valueForFlag(args, "--output");
+  const ciEvidenceFile = valueForFlag(args, "--ci-evidence");
+  const policyFile = valueForFlag(args, "--policy");
   const agent = agentFromArgs(args);
 
   if (args[0] === "verify" && args[1]) {
@@ -345,7 +418,15 @@ function main(): void {
     if (format === "text") console.log(`${D}grading ${sess.agent} session: ${sess.path}${X}`);
   }
 
-  const project = collectProjectContext();
+  const project = collectProjectContext(process.cwd(), {
+    ciEvidenceFile,
+    policyFile,
+  });
+  const minTrust = cliMinTrust ?? project.policy?.minTrust ?? (ci ? 80 : null);
+  const allowWarnings =
+    args.includes("--allow-warnings") ||
+    args.includes("--score-only") ||
+    project.policy?.allowWarnings === true;
   const relTranscript = path.relative(process.cwd(), file);
   if (!relTranscript.startsWith("..") && !path.isAbsolute(relTranscript)) {
     project.changedFiles = project.changedFiles?.filter((changed) => changed !== relTranscript);

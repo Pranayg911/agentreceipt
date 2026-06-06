@@ -2,7 +2,13 @@
 
 import { sign, verify, type SignaturePayload } from "./signer.js";
 import type { JsonValue } from "./stable-json.js";
-import type { AnalysisResult, ClaimReceipt, CommandEvidence } from "./analyze.js";
+import type {
+  AgentReceiptPolicy,
+  AnalysisResult,
+  CiCheckEvidence,
+  ClaimReceipt,
+  CommandEvidence,
+} from "./analyze.js";
 import type { Score } from "./score.js";
 import type { ParsedSession } from "./parse.js";
 
@@ -26,11 +32,13 @@ export interface TrustReceipt {
     };
     summary: string;
     nextActions: string[];
+    policy?: AgentReceiptPolicy;
     auditTrail: {
       promptExcerpt: string | null;
       changedFiles: string[];
       evidenceSource: "git" | "transcript" | "none";
       commands: CommandEvidence[];
+      ciChecks: CiCheckEvidence[];
       story: string[];
       privacyNote: string;
     };
@@ -42,6 +50,8 @@ export interface TrustReceipt {
       verified: number;
       contradicted: number;
       unsupported: number;
+      policyViolations: number;
+      ciChecks: number;
       inputTokens: number;
       outputTokens: number;
       approxCostUsd: number;
@@ -83,6 +93,12 @@ function decisionFor(
 
 function summaryFor(analysis: AnalysisResult, sc: Score): string {
   const { verified, contradicted, unsupported } = analysis.counts;
+  if (analysis.policyViolations > 0) {
+    return `Trust ${sc.trust}/100 because ${plural(
+      analysis.policyViolations,
+      "team policy requirement"
+    )} did not pass. Fix the required gate before merge.`;
+  }
   if (contradicted > 0) {
     return `Trust ${sc.trust}/100 because AgentReceipt found ${plural(
       contradicted,
@@ -111,6 +127,17 @@ function mergeGateFor(
   decision: TrustReceipt["body"]["decision"],
   analysis: AnalysisResult
 ): TrustReceipt["body"]["mergeGate"] {
+  if (analysis.policyViolations > 0) {
+    return {
+      status: "fail",
+      title: "Team policy gate failed",
+      reason: `${plural(
+        analysis.policyViolations,
+        "required policy check"
+      )} must pass before this AI-code change can merge.`,
+      blocking: true,
+    };
+  }
   if (decision.label === "ready") {
     return {
       status: "pass",
@@ -178,6 +205,14 @@ function actionForClaim(claim: ClaimReceipt): string | null {
         : "Attach successful deploy evidence if this receipt is used for release approval.";
     case "verification":
       return "Run the expected test/build/typecheck/lint commands after the latest edit.";
+    case "ci":
+      return failed
+        ? "Fix the failed external CI check, then regenerate or rerun AgentReceipt."
+        : "Wait for external CI to finish successfully, then rerun AgentReceipt.";
+    case "policy":
+      return failed
+        ? "Fix the required team policy gate, then rerun AgentReceipt."
+        : "Run the required team policy check or attach matching CI evidence.";
     case "fix":
       return failed
         ? "Make an actual file edit for the claimed fix, or remove the claim."
@@ -220,6 +255,14 @@ function storyFor(
   const failed = commands.filter((c) => c.status === "failed").length;
   const unknown = commands.filter((c) => c.status === "unknown").length;
   const passed = commands.filter((c) => c.status === "passed").length;
+  const ciPassed = analysis.ciChecks.filter(
+    (c) => c.status === "completed" && c.conclusion === "success"
+  ).length;
+  const ciFailed = analysis.ciChecks.filter((c) =>
+    ["failure", "cancelled", "timed_out", "action_required", "startup_failure"].includes(
+      c.conclusion ?? ""
+    )
+  ).length;
   const topIssue = analysis.receipts.find((r) => r.status !== "verified");
 
   return [
@@ -234,6 +277,9 @@ function storyFor(
     commands.length > 0
       ? `Commands observed: ${commands.length} total (${passed} passed, ${failed} failed, ${unknown} unknown).`
       : "No shell command evidence was captured.",
+    analysis.ciChecks.length > 0
+      ? `External CI observed: ${analysis.ciChecks.length} check(s) (${ciPassed} passed, ${ciFailed} failed).`
+      : "No external CI check evidence was attached.",
     topIssue
       ? `Top issue: ${topIssue.claim} - ${topIssue.evidence}`
       : "No failed or unproven findings were detected.",
@@ -258,14 +304,16 @@ export function buildReceipt(
     mergeGate,
     summary: summaryFor(analysis, sc),
     nextActions: nextActionsFor(analysis),
+    ...(analysis.policy ? { policy: analysis.policy } : {}),
     auditTrail: {
       promptExcerpt: analysis.promptExcerpt,
       changedFiles: analysis.changedFiles,
       evidenceSource: analysis.evidenceSource,
       commands: analysis.commands,
+      ciChecks: analysis.ciChecks,
       story: storyFor(analysis, decision),
       privacyNote:
-        "Prompt and command text is redacted and length-capped. The full raw transcript is not embedded in the receipt.",
+        "Prompt, command, and CI text is redacted and length-capped. The full raw transcript is not embedded in the receipt.",
     },
     claims: analysis.receipts,
     ...(session.evidenceNote ? { evidenceNote: session.evidenceNote } : {}),
@@ -275,6 +323,8 @@ export function buildReceipt(
       verified: analysis.counts.verified,
       contradicted: analysis.counts.contradicted,
       unsupported: analysis.counts.unsupported,
+      policyViolations: analysis.policyViolations,
+      ciChecks: analysis.ciChecks.length,
       inputTokens: session.inputTokens,
       outputTokens: session.outputTokens,
       approxCostUsd: approxCost(session.inputTokens, session.outputTokens),

@@ -34,6 +34,8 @@ Receipts include redacted, length-capped context: user request excerpt, changed 
 | Edit/write tools | Whether files were actually changed |
 | Git status | What changed in the working tree |
 | package.json scripts | Expected tests/builds/typechecks/lints that were skipped |
+| GitHub/check-run evidence | External CI checks that passed, failed, or stayed pending |
+| `.agentreceipt.json` policy | Required tests/build/typecheck/lint/migration/CI gates |
 | Schema/dependency files | Missing migrations, installs, builds, or tests |
 
 ## Example Receipt
@@ -51,6 +53,7 @@ Receipts include redacted, length-capped context: user request excerpt, changed 
   - User asked: "Make AgentReceipt show whether the AI actually verified its code before I merge it."
   - Files changed: src/cli.ts, src/receipt.ts, src/analyze.ts, README.md.
   - Commands observed: 2 total (1 passed, 1 failed, 0 unknown).
+  - External CI observed: 3 check(s) (2 passed, 1 failed).
   - Top issue: Tests failed during the session - `npm test` exited 1
   - Decision: Do not merge yet.
 
@@ -58,8 +61,12 @@ Receipts include redacted, length-capped context: user request excerpt, changed 
   FAILED npm test exit 1
   PASSED npm run typecheck exit 0
 
-  FAIL Tests failed during the session
-     tests failed after 5 changed files - `npm test` exited 1
+  EXTERNAL CI
+  FAIL unit-tests
+  PASS typecheck
+
+  FAIL Team policy requires tests
+     policy requires tests, but `npm test` exited 1
   GAP Build was skipped for changed code
      package.json has a build script, but no build command was observed
   PASS Typecheck ran after changes
@@ -88,6 +95,12 @@ npx --yes github:Pranayg911/agentreceipt --ci --min-trust 80
 # Early-adopter mode: missing proof warns, failed evidence still blocks.
 npx --yes github:Pranayg911/agentreceipt --ci --min-trust 80 --allow-warnings
 
+# Attach external CI/check-run evidence from a JSON file.
+npx --yes github:Pranayg911/agentreceipt --ci --ci-evidence checks.json
+
+# Enforce a specific policy file.
+npx --yes github:Pranayg911/agentreceipt --ci --policy .agentreceipt.json
+
 # Machine-readable reports.
 npx --yes github:Pranayg911/agentreceipt --format json
 npx --yes github:Pranayg911/agentreceipt --format markdown --output agentreceipt.md
@@ -110,6 +123,22 @@ When published to npm, the command becomes:
 npx agentreceipt --web
 ```
 
+## Team Policy
+
+Commit `.agentreceipt.json` to make the gate enforce your repo's rules:
+
+```json
+{
+  "minTrust": 80,
+  "allowWarnings": false,
+  "require": ["tests", "build", "ci"]
+}
+```
+
+Supported requirements are `tests`, `build`, `typecheck`, `lint`, `migration`, and `ci`.
+
+Policy failures are hard merge-gate failures. Ordinary missing proof can be a warning, but a missing required policy check blocks.
+
 ## GitHub Action
 
 Use AgentReceipt as a pull-request evidence gate:
@@ -122,6 +151,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
   pull-requests: write
 
 jobs:
@@ -136,7 +166,11 @@ jobs:
           comment: true
 ```
 
-The Action writes a markdown receipt to the GitHub Actions step summary. With `comment: true`, it also comments the receipt on the pull request.
+The Action writes a markdown receipt to the GitHub Actions step summary. With `comment: true`, it creates or updates one sticky pull-request comment.
+
+When `checks: read` is available, the Action automatically attaches GitHub check-run evidence for the commit. You can also pass `ci-evidence-file` explicitly.
+
+If you want AgentReceipt to enforce other jobs, run it after them with `needs:` so their check-runs are complete before the receipt is generated.
 
 By default, CI requires both:
 
@@ -161,12 +195,21 @@ Cloud runners cannot read agent logs stored on your laptop. If the transcript/ch
     allow-warnings: true
 ```
 
+```yaml
+- uses: Pranayg911/agentreceipt@main
+  with:
+    ci-evidence-file: .agentreceipt/checks.json
+    min-trust: 80
+```
+
 ## Why Models Do Not Replace It
 
 AgentReceipt is not an LLM judge. Models can make AgentReceipt better by running more checks, producing richer transcripts, and attaching more evidence. But the trust layer remains outside the model:
 
 - Deterministic analysis, not vibes.
 - Repo-aware skipped-check detection.
+- Team policy gates committed in the repo.
+- External CI evidence ingestion.
 - Signed receipts that can be verified offline.
 - Signed merge-gate decisions that CI can enforce.
 - Shareable web receipts that do not require raw transcript uploads.
@@ -190,9 +233,9 @@ receipt.body.claims;    // signed evidence findings
 
 ## Status
 
-`v0.1` supports Claude Code transcripts, Codex rollout logs, Cursor checkpoint metadata, deterministic claim checking, repo-aware skipped-check detection, signed decisions, signed merge gates, next-action guidance, ed25519 signing, offline verification, self-contained web receipt URLs, CI enforcement, markdown/json reports, and a GitHub Action.
+`v0.1` supports Claude Code transcripts, Codex rollout logs, Cursor checkpoint metadata, deterministic claim checking, repo-aware skipped-check detection, external CI evidence, team policy gates, signed decisions, signed merge gates, next-action guidance, ed25519 signing, offline verification, self-contained web receipt URLs, CI enforcement, markdown/json reports, and a GitHub Action.
 
-Next: CI log ingestion, richer Cursor transcript parsing, policy packs, team ledgers, and first-class npm distribution.
+Next: richer Cursor transcript parsing, policy packs, team ledgers, and first-class npm distribution.
 
 ## Links
 

@@ -35,6 +35,9 @@ export function score(a: AnalysisResult): Score {
   if (unsupported >= 3) {
     trust = Math.min(trust, 65);
   }
+  if (a.policyViolations > 0) {
+    trust = Math.min(trust, 70); // team policy failures should never look merge-ready
+  }
   if (verified + contradicted + unsupported === 0 && a.edits === 0) {
     trust = Math.min(trust, 68); // no observed work is not proof of trust
   }

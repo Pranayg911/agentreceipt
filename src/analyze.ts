@@ -28,11 +28,39 @@ export interface CommandEvidence {
   exitCode: number | null;
 }
 
+export interface CiCheckEvidence {
+  name: string;
+  status: "queued" | "in_progress" | "completed" | "unknown";
+  conclusion:
+    | "success"
+    | "failure"
+    | "cancelled"
+    | "timed_out"
+    | "action_required"
+    | "neutral"
+    | "skipped"
+    | "startup_failure"
+    | null;
+  detailsUrl?: string;
+}
+
+export type PolicyRequirement = "tests" | "build" | "typecheck" | "lint" | "migration" | "ci";
+
+export interface AgentReceiptPolicy {
+  minTrust?: number;
+  allowWarnings?: boolean;
+  require?: PolicyRequirement[];
+}
+
 export interface ProjectAuditContext {
   /** Changed files from git status/diff. If omitted, we fall back to transcript edit paths. */
   changedFiles?: string[];
   /** Scripts from the nearest package.json, when available. */
   packageScripts?: Record<string, string>;
+  /** External CI/check-run evidence, usually from GitHub Actions. */
+  ciChecks?: CiCheckEvidence[];
+  /** Team-defined gates from .agentreceipt.json, agentreceipt.config.json, or package.json. */
+  policy?: AgentReceiptPolicy;
   /** Where changedFiles came from. */
   source?: "git" | "transcript" | "none";
 }
@@ -107,6 +135,14 @@ const ANY_VERIFY_CMD = new RegExp(
   ].join("|"),
   "i"
 );
+
+const POLICY_COMMANDS = {
+  tests: { re: TEST_CMD, label: "Tests" },
+  build: { re: BUILD_CMD, label: "Build" },
+  typecheck: { re: TYPECHECK_CMD, label: "Typecheck" },
+  lint: { re: LINT_CMD, label: "Lint" },
+  migration: { re: MIGRATION_CMD, label: "Migration" },
+} as const;
 
 const GENERATED_OR_VENDOR =
   /(^|\/)(node_modules|\.next|dist|build|coverage|\.git|vendor|target|\.turbo|\.cache)(\/|$)/i;
@@ -251,6 +287,132 @@ function commandEvidence(bash: { call: ToolCall; cmd: string }[]): CommandEviden
     status: call.ok ? "passed" : call.exitCode === null ? "unknown" : "failed",
     exitCode: call.exitCode,
   }));
+}
+
+function ciFailed(check: CiCheckEvidence): boolean {
+  return ["failure", "cancelled", "timed_out", "action_required", "startup_failure"].includes(
+    check.conclusion ?? ""
+  );
+}
+
+function ciPassed(check: CiCheckEvidence): boolean {
+  return check.status === "completed" && check.conclusion === "success";
+}
+
+function ciPending(check: CiCheckEvidence): boolean {
+  return check.status !== "completed" || check.conclusion == null;
+}
+
+function auditCiChecks(project?: ProjectAuditContext): ClaimReceipt[] {
+  const checks = project?.ciChecks ?? [];
+  if (checks.length === 0) return [];
+  const failed = checks.filter(ciFailed);
+  const pending = checks.filter(ciPending);
+  const passed = checks.filter(ciPassed);
+  const findings: ClaimReceipt[] = [];
+
+  if (failed.length > 0) {
+    findings.push({
+      kind: "ci",
+      claim: "CI check failed",
+      status: "contradicted",
+      evidence: `${failed.length} external CI check${failed.length === 1 ? "" : "s"} failed: ${failed
+        .slice(0, 3)
+        .map((c) => c.name)
+        .join(", ")}`,
+    });
+  }
+  if (pending.length > 0) {
+    findings.push({
+      kind: "ci",
+      claim: "CI checks were still pending",
+      status: "unsupported",
+      evidence: `${pending.length} external CI check${pending.length === 1 ? "" : "s"} had no completed success/failure result yet`,
+    });
+  }
+  if (passed.length > 0 && failed.length === 0) {
+    findings.push({
+      kind: "ci",
+      claim: "External CI checks passed",
+      status: "verified",
+      evidence: `${passed.length} external CI check${passed.length === 1 ? "" : "s"} completed successfully`,
+    });
+  }
+
+  return findings;
+}
+
+function auditPolicy(
+  bash: { call: ToolCall; cmd: string }[],
+  project?: ProjectAuditContext
+): ClaimReceipt[] {
+  const required = project?.policy?.require ?? [];
+  if (required.length === 0) return [];
+  const findings: ClaimReceipt[] = [];
+
+  for (const req of required) {
+    if (req === "ci") {
+      const checks = project?.ciChecks ?? [];
+      const failed = checks.filter(ciFailed);
+      const pending = checks.filter(ciPending);
+      const passed = checks.filter(ciPassed);
+      if (failed.length > 0) {
+        findings.push({
+          kind: "policy",
+          claim: "Team policy requires passing external CI",
+          status: "contradicted",
+          evidence: `policy requires CI, but ${failed.length} external check${failed.length === 1 ? "" : "s"} failed`,
+        });
+      } else if (pending.length > 0 || passed.length === 0) {
+        findings.push({
+          kind: "policy",
+          claim: "Team policy requires passing external CI",
+          status: "unsupported",
+          evidence:
+            checks.length === 0
+              ? "policy requires CI, but no external CI check evidence was attached"
+              : "policy requires CI, but not every attached check had a completed success result",
+        });
+      } else {
+        findings.push({
+          kind: "policy",
+          claim: "Team policy requires passing external CI",
+          status: "verified",
+          evidence: `policy satisfied by ${passed.length} successful external CI check${passed.length === 1 ? "" : "s"}`,
+        });
+      }
+      continue;
+    }
+
+    const spec = POLICY_COMMANDS[req];
+    const last = lastRelevant(bash, spec.re);
+    if (!last) {
+      findings.push({
+        kind: "policy",
+        claim: `Team policy requires ${spec.label.toLowerCase()}`,
+        status: "unsupported",
+        evidence: `policy requires ${spec.label.toLowerCase()}, but no matching command was observed`,
+      });
+    } else if (!last.call.ok) {
+      findings.push({
+        kind: "policy",
+        claim: `Team policy requires ${spec.label.toLowerCase()}`,
+        status: "contradicted",
+        evidence: `policy requires ${spec.label.toLowerCase()}, but \`${matchWindow(last.cmd, spec.re)}\`${
+          last.call.exitCode != null ? ` exited ${last.call.exitCode}` : " errored"
+        }`,
+      });
+    } else {
+      findings.push({
+        kind: "policy",
+        claim: `Team policy requires ${spec.label.toLowerCase()}`,
+        status: "verified",
+        evidence: `policy satisfied: \`${matchWindow(last.cmd, spec.re)}\` exited 0`,
+      });
+    }
+  }
+
+  return findings;
 }
 
 function checkFinding(
@@ -407,12 +569,15 @@ function auditWork(
 export interface AnalysisResult {
   receipts: ClaimReceipt[];
   counts: { verified: number; contradicted: number; unsupported: number };
+  policyViolations: number;
   edits: number;
   toolCalls: number;
   promptExcerpt: string | null;
   changedFiles: string[];
   evidenceSource: "git" | "transcript" | "none";
   commands: CommandEvidence[];
+  ciChecks: CiCheckEvidence[];
+  policy?: AgentReceiptPolicy;
 }
 
 export function analyze(session: ParsedSession, options: AnalyzeOptions = {}): AnalysisResult {
@@ -487,6 +652,8 @@ export function analyze(session: ParsedSession, options: AnalyzeOptions = {}): A
   }
 
   receipts.push(...auditWork(session, bash, edits, options.project));
+  receipts.push(...auditCiChecks(options.project));
+  receipts.push(...auditPolicy(bash, options.project));
 
   // Counts reflect every distinct claim we detected (drives the score).
   const counts = {
@@ -494,6 +661,9 @@ export function analyze(session: ParsedSession, options: AnalyzeOptions = {}): A
     contradicted: receipts.filter((r) => r.status === "contradicted").length,
     unsupported: receipts.filter((r) => r.status === "unsupported").length,
   };
+  const policyViolations = receipts.filter(
+    (r) => r.kind === "policy" && r.status !== "verified"
+  ).length;
   // Display order: the dramatic + damning first (contradicted → unsupported →
   // verified), then cap so the card stays readable.
   const rank = { contradicted: 0, unsupported: 1, verified: 2 } as const;
@@ -515,11 +685,14 @@ export function analyze(session: ParsedSession, options: AnalyzeOptions = {}): A
   return {
     receipts: display,
     counts,
+    policyViolations,
     edits,
     toolCalls: session.toolCalls.length,
     promptExcerpt,
     changedFiles: changed.files.slice(0, 30),
     evidenceSource: changed.source,
     commands: commandEvidence(bash),
+    ciChecks: (options.project?.ciChecks ?? []).slice(0, 20),
+    ...(options.project?.policy ? { policy: options.project.policy } : {}),
   };
 }
